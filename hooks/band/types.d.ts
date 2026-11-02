@@ -8,7 +8,11 @@ export type Row = {
   status: 'running' | 'done'
   ms: number | null
   startedAt: number
-  // The run's expected total duration from its forecast, or null when unknown.
+  // The workflow phase (route, worker, verify, diagnose, final) and the model and effort exactly as the ladder labelled them.
+  phase: string
+  model: string | null
+  effort: string | null
+  // This agent's expected duration, set when the row finishes and so frozen; a running row reads it live, so null.
   expectedMs: number | null
 }
 

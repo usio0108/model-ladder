@@ -61,14 +61,42 @@ export function finishForecast(root, state, rows, guard, status, now = Date.now(
   return state
 }
 
-// The band's run lock carries the forecast total, so its time column can show elapsed/expected for this run only.
-function lockExpected(root, runId, forecast) {
+// Per-agent expected durations for the time column, from the phases earlier runs recorded in forecast.phases.
+// Samples are the same successful runs the run-level forecast calibrates on (VERIFIED, completed, uncensored, recent),
+// of this runtime. A phase+model+effort entry needs MIN_CELL_SAMPLES complete phases; phase alone is the fallback.
+// Shape (read by agentExpected in hooks/band/rows.mjs): { cells: { 'worker/haiku/low': ms }, phases: { worker: ms } }.
+const MIN_CELL_SAMPLES = 2
+const EXPECTED_MAX_AGE = 90 * 86400000
+const median = (values) => values.sort((a, b) => a - b)[Math.floor(values.length / 2)]
+export function agentExpectations(rows, runtime, now = Date.now()) {
+  const byCell = new Map(), byPhase = new Map()
+  const add = (map, key, ms) => map.set(key, [...(map.get(key) ?? []), ms])
+  for (const f of rows.map((r) => r?.forecast)) {
+    if (f?.version !== 1 || f.runtime !== runtime || f.actual?.status !== 'VERIFIED' || f.actual.completed !== true || f.actual.censored !== false ||
+      !Number.isFinite(f.actual.endedAt) || f.actual.endedAt > now || now - f.actual.endedAt > EXPECTED_MAX_AGE) continue
+    for (const p of Array.isArray(f.phases) ? f.phases : []) {
+      if (typeof p?.phase !== 'string' || p.complete !== true || !Number.isFinite(p.durationMs) || p.durationMs <= 0) continue
+      add(byCell, `${p.phase}/${p.model}/${p.effort}`, p.durationMs)
+      add(byPhase, p.phase, p.durationMs)
+    }
+  }
+  return {
+    cells: Object.fromEntries([...byCell].filter(([, v]) => v.length >= MIN_CELL_SAMPLES).map(([k, v]) => [k, median(v)])),
+    phases: Object.fromEntries([...byPhase].map(([k, v]) => [k, median(v)])),
+  }
+}
+
+// The band's run lock carries the run's forecast total (the no-model row) and each agent's expected duration, so
+// the band reads both live as the run goes. It is written at every boundary start too: the router spawns inside the
+// first call, before any forecast total exists.
+function lockExpected(root, runId, forecast, now) {
   const expectedMs = forecast.original?.mostLikely
-  if (!(Number.isFinite(expectedMs) && expectedMs > 0)) return
+  const phaseExpected = agentExpectations(history(root), forecast.runtime, now)
   withMutex(root, 'registry', () => {
     let lock
     try { lock = JSON.parse(readFileSync(lockPath(root, runId), 'utf8')) } catch { return }
-    if (lock.expectedMs !== expectedMs) createLock(root, { ...lock, expectedMs })
+    const next = { ...lock, phaseExpected, ...(Number.isFinite(expectedMs) && expectedMs > 0 && { expectedMs }) }
+    if (!isDeepStrictEqual(next, lock)) createLock(root, next)
   })
 }
 
@@ -83,6 +111,7 @@ export function claudeBoundary(root, input, now = Date.now()) {
   if (input.event === 'start') {
     if (Number.isFinite(state.pendingBoundary)) throw new Error('Previous workflow boundary has not ended')
     state.pendingBoundary = now
+    lockExpected(root, input.runId, forecast, now)
   } else if (input.event === 'end') {
     if (!Number.isFinite(state.pendingBoundary)) throw new Error('No workflow boundary start')
     if (now < state.pendingBoundary) throw new Error('Clock moved backwards; phase timing is unavailable')
@@ -98,7 +127,7 @@ export function claudeBoundary(root, input, now = Date.now()) {
     delete state.pendingBoundary
     if (result.plan?.estimatedMinutes !== undefined) routeForecast(forecast, result.plan, result.plan.verify, history(root), now)
     updateForecast(root, forecast, history(root), claudeGuard(root), fresh.at(-1)?.phase ?? result.status, now)
-    lockExpected(root, input.runId, forecast)
+    lockExpected(root, input.runId, forecast, now)
   } else throw new Error('event must be start or end')
   atomicJson(path, state)
   return { forecast }

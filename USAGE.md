@@ -166,7 +166,10 @@ The main session adds the goal, decisions, completed work, next steps, and resum
 If the session cannot call a model, keep the template as the fallback.
 A force-killed run may lack a checkpoint or `result.json`; inspect its draft and restart the original task after quota reset instead of inventing `resumeRun`.
 
-Duration forecasts are stored in live/result/history JSON; the panel time column shows elapsed/expected (most-likely total).
+Duration forecasts are stored in live/result/history JSON; the panel time column shows elapsed/expected.
+An agent row (router, worker, test-writer, verifier) shows its own elapsed time over its own expected duration: the median phase duration from `forecast.phases` of comparable successful runs (VERIFIED, completed, uncensored, within 90 days, same runtime), keyed by phase plus model/effort once at least two runs have it and by phase alone before that. With no samples the row shows elapsed time only.
+Claude Code reads the table live from the run lock's `phaseExpected` (written at each workflow boundary) and the Codex panel reads `expected` in `live.json`; a finished row keeps the value it ended with.
+The `no model` row shows the run's elapsed time over the run's most-likely forecast total.
 They cover routing, implementation and self-checks, test commands, independent
 verification and retry risk. Router ranges are uncalibrated judgments until
 comparable successful histories supply empirical min/median/max error ratios.

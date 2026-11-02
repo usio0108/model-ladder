@@ -4,7 +4,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { Row } from './types'
 import { roundSpan } from './remaining.mjs'
 import { formatContext } from './context.mjs'
-import { addRow, anyRunning, finishRow, isRedo, removeRow, runCount } from './rows.mjs'
+import { addRow, agentExpected, anyRunning, finishRow, isRedo, removeRow, runCount } from './rows.mjs'
 import { GUARD_DEFAULT, mergeConfig, parseThreshold, pluginLayer, projectPins, projectSkills, setGuard, userConfigPath } from '../config-layers.mjs'
 
 const rows = atom({ plugin: 'model-ladder', key: 'rows' } as const, [])
@@ -77,7 +77,8 @@ const remaining = (resetsAt: string | null | undefined, now: number) => {
 
 // A Claude Code run's lock (.model-ladder/runs/<runId>.json, scripts/runs.mjs): preflight writes it, finish removes it.
 // expectedMs is the run's forecast total (scripts/forecast.mjs writes it once routing has produced one), else null.
-type Lock = { runId: string; startedAt: number; phase: string; task: string; expectedMs: number | null }
+// phaseExpected is the per-agent expectations table (scripts/forecast.mjs agentExpectations), written at preflight and each boundary.
+type Lock = { runId: string; startedAt: number; phase: string; task: string; expectedMs: number | null; phaseExpected: unknown }
 
 // The skill that has the main session write HANDOFF.md from its conversation (skills/handoff/SKILL.md).
 const HANDOFF_COMMAND = '/model-ladder:handoff'
@@ -125,7 +126,7 @@ async function claudeLocks($: EngineInterface): Promise<Lock[]> {
     try {
       const lock = JSON.parse(await $.fs.read(`${dir}/${entry.name}`))
       if (lock?.runtime !== 'claude') continue
-      found.push({ runId: String(lock.runId ?? entry.name), startedAt: Date.parse(lock.startedAt) || 0, phase: String(lock.phase ?? 'running'), task: String(lock.task ?? ''), expectedMs: Number.isFinite(lock.expectedMs) && lock.expectedMs > 0 ? lock.expectedMs : null })
+      found.push({ runId: String(lock.runId ?? entry.name), startedAt: Date.parse(lock.startedAt) || 0, phase: String(lock.phase ?? 'running'), task: String(lock.task ?? ''), expectedMs: Number.isFinite(lock.expectedMs) && lock.expectedMs > 0 ? lock.expectedMs : null, phaseExpected: lock.phaseExpected ?? null })
     } catch { /* half-written or gone: skip it */ }
   }
   return found.sort((a, b) => b.startedAt - a.startedAt)
@@ -136,6 +137,11 @@ const ladderLock = (locks: Lock[], task: string | undefined) => {
   const own = task ? locks.filter((l) => l.task.trim().split('\n')[0].trim() === task) : []
   return own.length === 1 ? own[0] : null
 }
+
+// The agent's own expected duration, read from its run's lock each time it is asked (never kept from spawn): its
+// phase+model+effort entry, else its phase; null (elapsed only) when its run has no lock, no table or no samples.
+const agentExpectedMs = (locks: Lock[], tasks: Map<string, string>, r: Row) =>
+  agentExpected(ladderLock(locks, tasks.get(r.run))?.phaseExpected, r.phase, r.model, r.effort)
 
 export const register: Register = (on, options) => {
   // Redraws once a second while an agent runs, so its elapsed time moves.
@@ -201,10 +207,10 @@ export const register: Register = (on, options) => {
     // Worker rows show just the task; the others say what they do with it.
     const isWorker = /^model-ladder:(worker|test-writer)$/.test(e.subagentType)
     const what = e.description.replace(/\s*\S+\/\S+$/, '')
-    const effort = e.description.match(/\S+\/(\S+)/)?.[1]
+    // The ladder labels its agents "<phase> <model>/<effort>" (workflows/ladder.js): route, worker, verify, diagnose, final.
+    const cellOf = e.description.match(/(\S+)\/(\S+)$/)
+    const effort = cellOf?.[2]
     const role = e.subagentType.slice('model-ladder:'.length) as Row['role']
-    // The run's forecast total, only from its own lock; unknown (no lock, no forecast yet, ambiguous) shows elapsed time alone.
-    const expectedMs = ladderLock(await claudeLocks($).catch(() => []), tasks.get(e.workflow.runId))?.expectedMs ?? null
     // shortcut: the turn.complete event type is not available here, so FAIL is inferred from "a worker spawns after a verifier in the same run"; this assumes the ladder only redispatches a worker after a FAIL, upgrade to the verifier's actual result once turn.complete exposes its output.
     const redo = isRedo(verified, e.workflow.runId, isWorker)
     if (role === 'verifier') verified.add(e.workflow.runId)
@@ -218,7 +224,11 @@ export const register: Register = (on, options) => {
       status: 'running',
       startedAt: await $.clock.now(),
       ms: null,
-      expectedMs,
+      phase: what.split(/\s+/)[0],
+      model: cellOf?.[1] ?? null,
+      effort: effort ?? null,
+      // Not read here: the run's lock may not hold its expectations yet, and they are read live while the row runs.
+      expectedMs: null,
     }
     await update($, rows, (list) => addRow(list, row))
     tick ??= $.clock.every(1000, () => {
@@ -237,9 +247,12 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId && (await read($, rows)).some((r) => r.id === e.agentId)) {
+    const finished = e.agentId ? (await read($, rows)).find((r) => r.id === e.agentId) : undefined
+    if (e.agentId && finished) {
       const id = e.agentId
-      const list = await update($, rows, (l) => finishRow(l, id, e.durationMs) as Row[])
+      // The row keeps the expectation it showed last; it is read one final time here, as it finishes.
+      const expectedMs = agentExpectedMs(await claudeLocks($).catch(() => []), tasks, finished) ?? finished.expectedMs
+      const list = await update($, rows, (l) => finishRow(l, id, e.durationMs, expectedMs) as Row[])
       if (!anyRunning(list)) { tick?.cancel(); tick = null }
       // A finished row keeps its check mark for a while before it leaves.
       $.clock.after(DONE_MS, () => { void update($, rows, (l) => removeRow(l, id)) })
@@ -254,9 +267,13 @@ export const register: Register = (on, options) => {
     const els = $.ui.resolve(e)
     const { Box, Button, Text } = els
     const now = await $.clock.now()
-    // Elapsed, then "/" and the run's expected total when known; a finished row keeps both as they were.
+    // Every lock is read on each render, so a running agent's expectation is live, not as it was at spawn.
+    const locks = await claudeLocks($)
+    // Elapsed, then "/" and the expected duration when known; a finished row keeps both as they were.
     const total = (ms: number | null | undefined) => (ms ? `/${span(ms)}` : '')
-    const elapsed = (r: Row) => `${r.status === 'done' ? '✓ ' : ''}${span(r.ms ?? now - r.startedAt)}${total(r.expectedMs)}`
+    // An agent row: this agent's own elapsed over this agent's own expected duration. A running row reads its
+    // expectation from the lock now; a finished row keeps the one it finished with.
+    const elapsed = (r: Row) => `${r.status === 'done' ? '✓ ' : ''}${span(r.ms ?? now - r.startedAt)}${total(r.status === 'done' ? r.expectedMs : agentExpectedMs(locks, tasks, r))}`
     const usage = (await $.session.usage()).rateLimits
       .filter((w) => WINDOW[w.kind])
       .map((w) => {
@@ -273,9 +290,10 @@ export const register: Register = (on, options) => {
     const tag = (r: Row) => (runs > 1 ? `${fit(tasks.get(r.run) ?? '', 20).trim()} ` : '')
     const dot = last && <Text>{' ' + (last.role === 'verifier' ? '🔵' : last.redo ? '🔴' : '🟢')}</Text>
     // Between ladder agents a run is still going while its lock exists: the main session holds it.
-    const main = running.length ? null : ((await claudeLocks($))[0] ?? null)
+    const main = running.length ? null : (locks[0] ?? null)
     if (main) mainTick ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
     else { mainTick?.cancel(); mainTick = null }
+    // The no-model row is the main session: the run's elapsed over the run's forecast total.
     const mainElapsed = (m: Lock) => `${span(now - m.startedAt)}${total(m.expectedMs)}`
     const mainTask = main ? `${main.phase}: ${main.task}` : ''
     const idle = running.length || main ? '' : ' · idle'

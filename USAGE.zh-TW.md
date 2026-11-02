@@ -4,7 +4,10 @@
 
 ## 後端預估與校準
 
-耗時範圍以結構化資料存於 live/result/history JSON，面板時間欄顯示「經過/預估總時長」。範圍包含路由、
+耗時範圍以結構化資料存於 live/result/history JSON，面板時間欄顯示「經過/預估」。
+agent 列（router、worker、test-writer、verifier）顯示該 agent 自己的經過時間與自己的預期時長：取自可比較成功 run（VERIFIED、已完成、未被截斷、90 天內、相同 runtime）的 `forecast.phases` 階段時長中位數，至少有兩筆樣本時依「階段加模型/effort」，之前只依階段；沒有樣本時只顯示經過時間。
+Claude Code 即時讀取 run 鎖中的 `phaseExpected`（每個 workflow 邊界寫入），Codex 面板讀取 `live.json` 的 `expected`；已結束的列保留結束時的值。
+`no model` 列顯示 run 經過時間與 run 的最可能預估總時長。範圍包含路由、
 實作、自我檢查、測試、獨立驗證與重試風險。無可比較成功歷史時，範圍僅為
 路由模型判斷；有資料後使用實際誤差比例的最小值、中位數與最大值，不宣稱
 信賴區間或準確率。歷史保留原始預估、階段更新、模型、effort、token、實際計時

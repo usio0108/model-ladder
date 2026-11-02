@@ -22,7 +22,7 @@ model-ladder 是 [Claude Code](https://code.claude.com) 與 Codex 的外掛。Ro
 - **隔離的 Git worktree**：每次嘗試各自在獨立 worktree 中執行。
 - **適時升級**：驗證失敗時，可能改用更強的模型或提高 effort。
 - **小任務 DIRECT**：實際 session context 達到設定門檻時，由主 session 處理小任務，完成後仍須獨立驗證。
-- **預估資訊**：面板時間欄顯示「經過/預估」（例如 `5s/12m`）；開跑時若預估某個用量時間窗不足或有風險，會在 worker 開始前詢問一次；大型任務不再要求拆分確認。
+- **預估資訊**：每個 agent 列的時間欄顯示該 agent 自己的「經過/預期時長」（例如 `5s/12m`，來自先前成功的 run；沒有歷史時只顯示經過時間）；開跑時若預估某個用量時間窗不足或有風險，會在 worker 開始前詢問一次；大型任務不再要求拆分確認。
 - **使用量保護**：偵測到用量停止條件時結束目前 run 並強制停止同機其他已註冊 run。
 - **交接文件**：用量停止或執行 `/model-ladder:handoff` 時建立 `.model-ladder/HANDOFF.md`，由主 session 根據對話改寫，並保留程式產生的驗證附錄。
 - **Band / panel / HUD**：透過 Claude band 或 Codex 終端顯示查看角色、用量與保護控制，Claude 另顯示 context token 與百分比。
@@ -111,7 +111,7 @@ haiku-5.5/low       5s       Summarize the README install steps
 | 使用量 | 各額度視窗顯示重設倒數、視窗長度與使用百分比。 |
 | Context | `ctx 287k/1M (28.7%)` 顯示已用 token、視窗上限與百分比，token 未知時只顯示上限。 |
 | 狀態 | 🟢 worker 或 router、🔵 verifier、🔴 重試中的 worker，任務列的 `✓` 表示已結束。 |
-| 任務列 | 顯示模型、effort、耗時與任務。 |
+| 任務列 | 顯示模型、effort、耗時（除以該 agent 自己的預期時長，沒有歷史時只顯示耗時）與任務；`no model` 列顯示 run 耗時與 run 預估總時長。 |
 | `▴` / `▾` | 收合或展開 Band。 |
 | 指示箭頭 | 只顯示生效指示且不加 `skill instructions:` 前綴，預設收成一行，以 `▸` 展開、`▾` 收合。 |
 | `usage guard` | 開關使用量保護。 |

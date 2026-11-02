@@ -2,6 +2,7 @@ import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { roundSpan } from '../hooks/band/remaining.mjs'
+import { agentExpected } from '../hooks/band/rows.mjs'
 
 export function atomicJson(path, value) {
   mkdirSync(dirname(path), { recursive: true })
@@ -59,10 +60,12 @@ export function renderLive(state, { width = 80, now = Date.now(), guard = { enab
   }
   const lines = [`▴ ${dot}model-ladder ── ${window('fiveHour', '5h')} · ${window('sevenDay', '7d')}${idle ? ' · idle' : ''}`]
   const modelWidth = Math.min(32, Math.max(12, ...agents.map((a) => displayWidth(`${a.model}/${a.effort}`))))
-  // Elapsed, then "/" and the run's expected total (agent.expectedMs, taken from live.forecast when the row started).
+  // Elapsed, then "/" and this agent's own expected duration. A running row reads it from state.expected (the
+  // expectations table, scripts/forecast.mjs agentExpectations) at every render; a finished row keeps agent.expectedMs.
   const times = agents.map((agent) => {
     const seconds = Math.max(0, Math.floor(((agent.endedAt ? Date.parse(agent.endedAt) : now) - Date.parse(agent.startedAt)) / 1000))
-    const expected = Number.isFinite(agent.expectedMs) && agent.expectedMs > 0 ? `/${roundSpan(agent.expectedMs)}` : ''
+    const ms = agent.endedAt ? agent.expectedMs : agentExpected(state?.expected, agent.phase, agent.model, agent.effort)
+    const expected = Number.isFinite(ms) && ms > 0 ? `/${roundSpan(ms)}` : ''
     return `${agent.endedAt ? agent.pass === false ? '✗ ' : '✓ ' : ''}${seconds}s${expected}`
   })
   const timeWidth = Math.max(12, ...times.map(displayWidth))

@@ -5,7 +5,8 @@ import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { TEST_PATTERNS } from '../hooks/guard.mjs'
 import { legalMoves, pickMove, isCell, isDirect, usageRisk } from './ladder-rules.mjs'
-import { history, startForecast, routeForecast, updateForecast, finishForecast } from './forecast.mjs'
+import { agentExpected } from '../hooks/band/rows.mjs'
+import { agentExpectations, history, startForecast, routeForecast, updateForecast, finishForecast } from './forecast.mjs'
 import { readCodexUsage } from './codex-usage.mjs'
 import { atomicJson, renderLive } from './codex-live.mjs'
 import { writeHandoff } from './codex-handoff.mjs'
@@ -130,8 +131,8 @@ export async function runLadder(input, options = {}) {
     options.onProgress?.(renderLive(live, { width: options.columns ?? process.stderr.columns ?? 80, guard: liveGuard }))
   }
   const role = async (phase, cell, task, execute) => {
-    // expectedMs freezes the run's forecast total when the row starts; the router's row starts before one exists.
-    const agent = { expectedMs: forecast.runId === live.runId ? forecast.original?.mostLikely ?? null : null, retry: phase === 'worker' && attempts.some((a) => a.reason && !a.pass), phase, model: cell.model, effort: cell.effort, task, startedAt: new Date().toISOString(), endedAt: null, pass: null }
+    // expectedMs stays null while the row runs (the panel reads live.expected each render) and freezes when it ends.
+    const agent = { expectedMs: null, retry: phase === 'worker' && attempts.some((a) => a.reason && !a.pass), phase, model: cell.model, effort: cell.effort, task, startedAt: new Date().toISOString(), endedAt: null, pass: null }
     live.agents.push(agent)
     let completed = false
     const usageIndex = usage.length
@@ -151,6 +152,7 @@ export async function runLadder(input, options = {}) {
     }
     finally {
       agent.endedAt = new Date().toISOString()
+      agent.expectedMs = agentExpected(live.expected, phase, cell.model, cell.effort)
       const endedAt = Date.parse(agent.endedAt), startedAt = Date.parse(agent.startedAt)
       forecast.phases.push({ phase, model: cell.model, effort: cell.effort, startedAt, endedAt, durationMs: endedAt - startedAt,
         elapsedMs: endedAt - forecast.startedAt, complete: completed, pass: agent.pass, tokens: usage.length > usageIndex ? usage.at(-1).turns : null, provenance: 'runner-clock' })
@@ -184,7 +186,8 @@ export async function runLadder(input, options = {}) {
     // Machine-wide, so another run's usage guard can stop this one (scripts/usage-guard.mjs forceStopRuns).
     registerRun({ runId, pid: process.pid, root, runtime: 'codex' })
     pruneRuns(root, { keepFailed: config.keepFailed })
-    live = { runId, task: input.task, input, forecast, skills: { worker: config.worker_skills, verifier: config.verifier_skills }, updatedAt: null, agents: [], usage: { fiveHour: null, sevenDay: null } }
+    // Each agent's expected duration, from earlier successful runs' phase timings; the panel looks its row up here.
+    live = { runId, task: input.task, input, forecast, expected: agentExpectations(past, 'codex'), skills: { worker: config.worker_skills, verifier: config.verifier_skills }, updatedAt: null, agents: [], usage: { fiveHour: null, sevenDay: null } }
     liveGuard = config.usageGuard
     publish()
     const checkUsage = () => {

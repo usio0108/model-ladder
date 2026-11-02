@@ -4,7 +4,10 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
-## [Unreleased]
+## [1.1.1] - 2026-11-02
+
+- Claude Code band 與 Codex 面板中每個 agent 列（router、worker、test-writer、verifier）的時間欄，改為顯示「該 agent 自己的經過時間 / 自己的預期時長」，不再以整個 run 的預估總時長為分母。預期時長取自先前可比較成功 run 的階段計時中位數：有兩筆樣本時依「階段加模型/effort」，之前只依階段；沒有樣本時只顯示經過時間。
+- 執行中的列即時讀取預期時長，spawn 時 run 還沒有預估也不會缺漏。`no model` 列維持顯示 run 經過時間與 run 預估總時長。
 
 ## [1.1.0] - 2026-10-30
 

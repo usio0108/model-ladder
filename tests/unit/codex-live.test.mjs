@@ -37,17 +37,29 @@ test('completed rows freeze elapsed time and disappear at ten seconds; active ro
   assert.doesNotMatch(renderLive({ agents: [running] }, { now: start + 12000, guard: { enabled: false } }), /idle|threshold/)
 })
 const NL = String.fromCharCode(10)
-test('time column shows elapsed/expected from the run forecast, freezes with the row and falls back to elapsed alone', () => {
+test('time column shows each agent\'s elapsed over its own expected duration, read live, freezing with the row; elapsed alone without samples', () => {
   const start = Date.parse('2026-10-23T00:00:00Z')
-  const agent = { phase: 'worker', model: 'luna', effort: 'low', task: 'Fix greeting', startedAt: new Date(start).toISOString(), endedAt: null, pass: null, expectedMs: 720000 }
-  const timeCell = (frame) => frame.split(NL)[2].slice(14).split('  ')[0].trim()
-  assert.equal(timeCell(renderLive({ agents: [agent] }, { now: start + 5000 })), '5s/12m')
-  const done = { ...agent, endedAt: new Date(start + 5000).toISOString(), pass: true }
-  assert.equal(timeCell(renderLive({ agents: [done] }, { now: start + 14000 })), '✓ 5s/12m')
+  const agent = { phase: 'worker', model: 'luna', effort: 'low', task: 'Fix greeting', startedAt: new Date(start).toISOString(), endedAt: null, pass: null, expectedMs: null }
+  const expected = { cells: { 'worker/luna/low': 720000 }, phases: { worker: 300000, verify: 120000 } }
+  const timeCell = (frame, row = 0) => frame.split(NL)[2 + row].slice(14).split('  ')[0].trim()
+  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 5000 })), '5s/12m')
+  // The model+effort entry wins; without one the phase alone is the fallback; each row has its own expectation.
+  const other = { ...agent, model: 'sol', effort: 'high', phase: 'verify' }
+  const two = renderLive({ agents: [agent, { ...agent, model: 'sol', effort: 'high' }, other], expected }, { now: start + 5000 })
+  assert.deepEqual([0, 1, 2].map((i) => timeCell(two, i)), ['5s/12m', '5s/5m', '5s/2m'])
+  // Read live: the same row shows a new expectation as soon as the table changes, and the run's forecast total is not used.
+  assert.equal(timeCell(renderLive({ agents: [agent], expected: { cells: { 'worker/luna/low': 1800000 }, phases: {} }, forecast: { original: { mostLikely: 9999999 } } }, { now: start + 5000 })), '5s/30m')
+  // A finished row keeps the value it ended with, whatever the table says later.
+  const done = { ...agent, endedAt: new Date(start + 5000).toISOString(), pass: true, expectedMs: 720000 }
+  assert.equal(timeCell(renderLive({ agents: [done], expected: { cells: {}, phases: { worker: 60000 } } }, { now: start + 14000 })), '✓ 5s/12m')
   assert.equal(timeCell(renderLive({ agents: [{ ...done, pass: false }] }, { now: start + 14000 })), '✗ 5s/12m')
-  for (const expectedMs of [undefined, null, 0, NaN]) assert.equal(timeCell(renderLive({ agents: [{ ...agent, expectedMs }] }, { now: start + 5000 })), '5s')
+  // No samples (no table, empty table, unknown phase, unusable values): elapsed only.
+  for (const table of [undefined, null, {}, { cells: {}, phases: {} }, { cells: { 'worker/luna/low': 0 }, phases: { worker: NaN } }, { cells: {}, phases: { verify: 120000 } }]) {
+    assert.equal(timeCell(renderLive({ agents: [agent], expected: table }, { now: start + 5000 })), '5s')
+  }
+  for (const expectedMs of [undefined, null, 0, NaN]) assert.equal(timeCell(renderLive({ agents: [{ ...done, expectedMs }] }, { now: start + 14000 })), '✓ 5s')
   // The time column is wider than 9 and every line still fits the panel.
-  const long = renderLive({ agents: [{ ...agent, expectedMs: 90 * 3600000 }] }, { now: start + 100000000, width: 60 })
+  const long = renderLive({ agents: [agent], expected: { cells: {}, phases: { worker: 90 * 3600000 } } }, { now: start + 100000000, width: 60 })
   assert.equal(timeCell(long), '100000s/4d')
   const header = long.split(NL)[1]
   assert.ok(header.indexOf('task') - header.indexOf('time') > 9 + 2)

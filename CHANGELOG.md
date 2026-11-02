@@ -4,7 +4,10 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
-## [Unreleased]
+## [1.1.1] - 2026-11-02
+
+- The time column of each agent row (router, worker, test-writer, verifier) in the Claude Code band and the Codex panel now shows that agent's own elapsed time over its own expected duration, not over the whole run's forecast total. The expected duration is the median of earlier comparable successful runs' phase timings, keyed by phase plus model/effort once there are two samples and by phase alone before that; with no samples only elapsed time shows.
+- A running row reads its expected duration live, so it no longer goes missing when the run has no forecast yet at spawn. The `no model` row keeps run elapsed over the run's forecast total.
 
 ## [1.1.0] - 2026-10-30
 

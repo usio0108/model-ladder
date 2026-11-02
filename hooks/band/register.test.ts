@@ -132,15 +132,18 @@ test('main-session row while a run lock exists and no agent runs; idle once the 
   }
 })
 
-// Locks as scripts/preflight.mjs writes them, expectedMs as scripts/forecast.mjs adds it once routing has a forecast.
-const lockFile = (runId: string, task: string, expectedMs?: number) => ({ runId, runtime: 'claude', pid: null, task, phase: 'claimed', startedAt: new Date(1_700_000_000_000 - 60_000).toISOString(), ...(expectedMs && { expectedMs }) })
+// Locks as scripts/preflight.mjs writes them. scripts/forecast.mjs adds phaseExpected (each agent's expected duration) at
+// every boundary and expectedMs (the run's forecast total) once routing has one.
+type Expected = { cells: Record<string, number>; phases: Record<string, number> }
+const lockFile = (runId: string, task: string, phaseExpected?: Expected, expectedMs?: number) => ({ runId, runtime: 'claude', pid: null, task, phase: 'claimed', startedAt: new Date(1_700_000_000_000 - 60_000).toISOString(), ...(phaseExpected && { phaseExpected }), ...(expectedMs && { expectedMs }) })
 
-test('time column shows elapsed/expected for the agent\'s own run, elapsed alone when unknown, and a finished row keeps its value', async ($, on) => {
+test('time column shows each agent\'s elapsed over its own expected duration, read live, elapsed alone when unknown, and a finished row keeps its value', async ($, on) => {
   const clock = mock.clock(on, { now: 1_700_000_000_000 })
   mock.env(on, { HOME: '/home/test' })
   const locks: Record<string, Record<string, unknown>> = {
-    'claude-a.json': lockFile('claude-a', 'Fix greeting', 720_000),
-    'claude-b.json': lockFile('claude-b', 'Other run'),
+    // The run's forecast total (1h) is not what an agent row shows.
+    'claude-a.json': lockFile('claude-a', 'Fix greeting', undefined, 3_600_000),
+    'claude-b.json': lockFile('claude-b', 'Other run', { cells: {}, phases: { worker: 60_000 } }),
   }
   on('session.cwd', () => ({ value: '/repos/app' }))
   on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
@@ -153,37 +156,62 @@ test('time column shows elapsed/expected for the agent\'s own run, elapsed alone
     const lock = locks[slash(e.path).split('/').at(-1) ?? '']
     return slash(e.path).startsWith('/repos/app/.model-ladder/runs/') && lock ? { value: JSON.stringify(lock) } : { deny: 'File does not exist' }
   })
-  on('agent.spawn', ($, e) => ({ agentId: e.description, model: 'claude-haiku-5-5' }))
+  on('agent.spawn', ($, e) => ({ agentId: `${e.workflow?.runId}:${e.description}`, model: 'claude-haiku-5-5' }))
   on('turn.complete', () => ({ text: '' }))
-  const spawn = (description: string, task: string, run: string) => $.agent.spawn({ subagentType: 'model-ladder:worker', description, prompt: `TASK (as the user wrote it)\n  ${task}`, workflow: { runId: run } })
-  await spawn('first', 'Fix greeting', 'host-a')
-  await spawn('second', 'Other run', 'host-b')
-  await spawn('third', 'No lock for this one', 'host-c')
+  const spawn = (description: string, task: string, run: string, type = 'worker') => $.agent.spawn({ subagentType: `model-ladder:${type}`, description, prompt: `TASK (as the user wrote it)\n  ${task}`, workflow: { runId: run } })
+  // The first run's lock has no expectations yet when its agents spawn: they must show up later, not be missed for good.
+  await spawn('worker haiku/low', 'Fix greeting', 'host-a')
+  await spawn('verify sonnet/low', 'Fix greeting', 'host-a', 'verifier')
+  await spawn('worker haiku/low', 'Other run', 'host-b')
+  await spawn('worker haiku/low', 'No lock for this one', 'host-c')
   await clock.advance(5000)
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface })
-    // Only the first run has a forecast; the other two rows must not borrow it.
-    expect(await ui.find({ type: 'Text', text: '5s/12m' })).toBeDefined()
-    expect(await ui.findAll({ type: 'Text', text: /^5s$/ })).toHaveLength(2)
-    expect(await ui.findAll({ type: 'Text', text: /^5s\// })).toHaveLength(1)
+    // No expectations anywhere in the first run, no lock for the third: elapsed alone. The second run's phase fallback shows.
+    expect(await ui.findAll({ type: 'Text', text: /^5s$/ })).toHaveLength(3)
+    expect(await ui.findAll({ type: 'Text', text: /^5s[/]/ })).toHaveLength(1)
+    expect(await ui.find({ type: 'Text', text: '5s/1m' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /[/]1h/ })).toBeUndefined()
     await ui.unmount()
   }
 
-  // A later forecast change in the lock does not move a finished row.
-  await $.turn.complete({ agentId: 'first', durationMs: 5000, answer: '' })
-  locks['claude-a.json'] = lockFile('claude-a', 'Fix greeting', 3_600_000)
+  // Forecast.mjs writes the first run's expectations while its agents run: a phase+model+effort entry beats the phase
+  // median, and each agent shows its own value (the verifier's differs from the worker's).
+  locks['claude-a.json'] = lockFile('claude-a', 'Fix greeting', { cells: { 'worker/haiku/low': 720_000, 'verify/sonnet/low': 180_000 }, phases: { worker: 300_000, verify: 120_000 } }, 3_600_000)
+  await clock.advance(1000)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect(await ui.find({ type: 'Text', text: '6s/12m' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '6s/3m' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '6s/1m' })).toBeDefined()
+    expect(await ui.findAll({ type: 'Text', text: /^6s$/ })).toHaveLength(1)
+    expect(await ui.find({ type: 'Text', text: /[/]1h/ })).toBeUndefined()
+    await ui.unmount()
+  }
+
+  // A cell without its own samples falls back to its phase; a change in the lock moves a running row.
+  locks['claude-a.json'] = lockFile('claude-a', 'Fix greeting', { cells: {}, phases: { worker: 300_000, verify: 120_000 } })
+  await clock.advance(1000)
+  const running = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await running.find({ type: 'Text', text: '7s/5m' })).toBeDefined()
+  expect(await running.find({ type: 'Text', text: '7s/2m' })).toBeDefined()
+  await running.unmount()
+
+  // A finished row keeps the value it finished with; a later change in the lock does not move it.
+  await $.turn.complete({ agentId: 'host-a:worker haiku/low', durationMs: 7000, answer: '' })
+  locks['claude-a.json'] = lockFile('claude-a', 'Fix greeting', { cells: { 'worker/haiku/low': 3_600_000 }, phases: {} })
   await clock.advance(2000)
   const frozen = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(await frozen.find({ type: 'Text', text: '✓ 5s/12m' })).toBeDefined()
-  expect(await frozen.find({ type: 'Text', text: /\/1h/ })).toBeUndefined()
+  expect(await frozen.find({ type: 'Text', text: '✓ 7s/5m' })).toBeDefined()
+  expect(await frozen.find({ type: 'Text', text: /[/]1h/ })).toBeUndefined()
   await frozen.unmount()
 })
 
 test('time column is wider than 9 and the main-session row shows its run\'s expected total', async ($, on) => {
   mock.clock(on, { now: 1_700_000_000_000 })
   mock.env(on, { HOME: '/home/test' })
-  const lock = lockFile('claude-1', 'fix the login bug', 720_000)
+  const lock = lockFile('claude-1', 'fix the login bug', undefined, 720_000)
   on('session.cwd', () => ({ value: '/repos/app' }))
   on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
   on('session.usage', () => ({ value: { rateLimits: [] } }))
