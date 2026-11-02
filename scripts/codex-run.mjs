@@ -28,7 +28,7 @@ export const DEFAULTS = {
   ],
   maxAttempts: 4, verify: null, protected: [], keepFailed: false, timeoutMs: 600000,
   usageGuard: GUARD_DEFAULT,
-  direct_threshold: 30, commit: false, autoRun: true, band: true, worker_skills: '', verifier_skills: '',
+  direct_threshold: 30, commit: false, autoRun: true, band: true, hudTakeover: true, worker_skills: '', verifier_skills: '',
 }
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 // defaults -> ~/.codex/model-ladder.json (personal, e.g. usageGuard) -> .codex/model-ladder.json (project).
@@ -45,7 +45,7 @@ export function loadConfig(root) {
   if (!Array.isArray(config.protected) || config.protected.some((p) => typeof p !== 'string')) throw new Error('protected must be a list of globs')
   if (config.verify !== null && (typeof config.verify !== 'string' || !config.verify.trim())) throw new Error('verify must be a command or null')
   if (typeof config.keepFailed !== 'boolean') throw new Error('keepFailed must be boolean')
-  for (const key of ['autoRun', 'band', 'commit']) if (typeof config[key] !== 'boolean') throw new Error(`${key} must be boolean`)
+  for (const key of ['autoRun', 'band', 'hudTakeover', 'commit']) if (typeof config[key] !== 'boolean') throw new Error(`${key} must be boolean`)
   const dt = config.direct_threshold
   if (dt !== 'off' && !(typeof dt === 'number' && dt >= 1 && dt <= 100)) throw new Error('direct_threshold must be a number between 1 and 100, or "off"')
   for (const key of ['worker_skills', 'verifier_skills']) if (typeof config[key] !== 'string') throw new Error(`${key} must be a string of skill instructions`)

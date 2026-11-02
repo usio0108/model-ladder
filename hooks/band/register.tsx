@@ -4,11 +4,13 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { Background, Row } from './types'
 import { roundSpan } from './remaining.mjs'
 import { formatContext } from './context.mjs'
-import { addBackground, addRow, agentExpected, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount } from './rows.mjs'
+import { activityText, addBackground, medianDuration, recordDuration, addRow, agentExpected, agentSamples, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount } from './rows.mjs'
 import { GUARD_DEFAULT, mergeConfig, parseThreshold, pluginLayer, projectPins, projectSkills, setGuard, userConfigPath } from '../config-layers.mjs'
 
 const rows = atom({ plugin: 'model-ladder', key: 'rows' } as const, [])
 // In-flight background tasks of this session (Bash background calls, async Workflow launches), shown while nothing else is.
+// The $.store key for past background-command durations (rows.mjs recordDuration), kept across sessions.
+const DURATIONS = 'backgroundDurations'
 const background = atom({ plugin: 'model-ladder', key: 'background' } as const, [] as Background[])
 const isFolded = atom({ plugin: 'model-ladder', key: 'isFolded' } as const, false)
 const areSkillsFolded = atom({ plugin: 'model-ladder', key: 'areSkillsFolded' } as const, true)
@@ -134,9 +136,11 @@ async function claudeLocks($: EngineInterface): Promise<Lock[]> {
   return found.sort((a, b) => b.startedAt - a.startedAt)
 }
 
-// The ladder run a workflow run belongs to: the one lock whose task is that run's TASK line. None or several: unknown.
+// The ladder run a workflow run belongs to: the one lock whose task is that run's TASK line. Each ladder boundary is
+// its own workflow run and a verifier or diagnosis prompt carries no TASK line, so with no task the only lock is it.
+// None or several: unknown.
 const ladderLock = (locks: Lock[], task: string | undefined) => {
-  const own = task ? locks.filter((l) => l.task.trim().split('\n')[0].trim() === task) : []
+  const own = task ? locks.filter((l) => l.task.trim().split('\n')[0].trim() === task) : locks
   return own.length === 1 ? own[0] : null
 }
 
@@ -146,10 +150,12 @@ const agentExpectedMs = (locks: Lock[], tasks: Map<string, string>, r: Row) =>
   agentExpected(ladderLock(locks, tasks.get(r.run))?.phaseExpected, r.phase, r.model, r.effort)
 
 // Records one background launch from its tool result; the band only watches, so a failure here is swallowed.
-const track = async ($: EngineInterface, kind: Background['kind'], id: unknown, label: unknown) => {
+// key: what its past durations are stored under (a shell command's first line), so a repeat has an expected duration.
+const track = async ($: EngineInterface, kind: Background['kind'], id: unknown, label: unknown, key?: unknown) => {
   try {
     if (typeof id !== 'string' || !id) return
-    const task: Background = { id, kind, label: String(label ?? '').trim().split('\n')[0].trim(), startedAt: await $.clock.now() }
+    const firstLine = (v: unknown) => String(v ?? '').trim().split('\n')[0].trim()
+    const task: Background = { id, kind, label: firstLine(label), startedAt: await $.clock.now(), ...(firstLine(key) && { key: firstLine(key) }) }
     await update($, background, (l) => addBackground(l, task))
   } catch { /* bookkeeping only */ }
 }
@@ -213,7 +219,7 @@ export const register: Register = (on, options) => {
   // A background launch is tracked from its tool result; the band only watches and never blocks or fails the call.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    await track($, 'shell', ran.result?.backgroundTaskId, e.description || e.command)
+    await track($, 'shell', ran.result?.backgroundTaskId, e.description || e.command, e.command)
     return ran
   })
   on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
@@ -222,12 +228,28 @@ export const register: Register = (on, options) => {
     return ran
   })
 
+  // A stopped background task sends no task-notification, so its row leaves when TaskStop runs.
+  on('tool.call', { tool: 'TaskStop' }, async ($, e, next) => {
+    const ran = await next(e)
+    const id = e.task_id ?? e.shell_id
+    if (id) await update($, background, (l) => removeBackground(l, [id])).catch(() => undefined)
+    return ran
+  })
+
   // A task-notification says which background tasks ended.
   on('prompt.submit', async ($, e, next) => {
     try {
       if (e.origin?.kind === 'task-notification') {
         const ids = [...e.text.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)].map((m) => m[1].trim())
+        // A command that ran to its end adds its duration to that command's history; a stopped one (TaskStop) does not.
+        const now = await $.clock.now()
+        const ended = (await read($, background)).filter((t) => ids.includes(t.id) && t.key)
         if (ids.length) await update($, background, (l) => removeBackground(l, ids))
+        if (ended.length) {
+          let history = ((await $.store.get(DURATIONS)) ?? {}) as Record<string, number[]>
+          for (const t of ended) history = recordDuration(history, t.key, now - t.startedAt)
+          await $.store.set(DURATIONS, history)
+        }
       }
     } catch { /* bookkeeping only */ }
     return next(e)
@@ -235,6 +257,8 @@ export const register: Register = (on, options) => {
 
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
+    // A background subagent the main session spawned itself (not a ladder agent) is a background row until it ends.
+    if (!e.workflow && e.background && result.agentId) await track($, 'agent', result.agentId, e.description)
     if (!e.workflow || !e.subagentType.startsWith('model-ladder:') || !result.agentId) return result
     const hasTask = /TASK[^\n]*\n\s*[^\n]+/.test(e.prompt)
     if (hasTask) tasks.set(e.workflow.runId, taskOf(e.prompt, ''))
@@ -282,6 +306,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId) await update($, background, (l) => removeBackground(l, [e.agentId!]))
     const finished = e.agentId ? (await read($, rows)).find((r) => r.id === e.agentId) : undefined
     if (e.agentId && finished) {
       const id = e.agentId
@@ -305,10 +330,27 @@ export const register: Register = (on, options) => {
     // Every lock is read on each render, so a running agent's expectation is live, not as it was at spawn.
     const locks = await claudeLocks($)
     // Elapsed, then "/" and the expected duration when known; a finished row keeps both as they were.
-    const total = (ms: number | null | undefined) => (ms ? `/${span(ms)}` : '')
+    const total = (ms: number | null | undefined, approx = false) => (ms ? `/${approx ? '~' : ''}${span(ms)}` : '')
     // An agent row: this agent's own elapsed over this agent's own expected duration. A running row reads its
     // expectation from the lock now; a finished row keeps the one it finished with.
-    const elapsed = (r: Row) => `${r.status === 'done' ? '✓ ' : ''}${span(r.ms ?? now - r.startedAt)}${total(r.status === 'done' ? r.expectedMs : liveExpected(now - r.startedAt, agentExpectedMs(locks, tasks, r)))}`
+    const elapsed = (r: Row) => {
+      const done = r.status === 'done'
+      const live = done ? null : liveExpected(now - r.startedAt, agentExpectedMs(locks, tasks, r), agentSamples(ladderLock(locks, tasks.get(r.run))?.phaseExpected, r.phase, r.model, r.effort))
+      return `${done ? '✓ ' : ''}${span(r.ms ?? now - r.startedAt)}${done ? total(r.expectedMs) : total(live?.ms, live?.approx)}`
+    }
+    // A running agent that has reached its expected duration shows what it is doing now instead of the task text,
+    // read from its own messages once per render; anything unreadable keeps the task text.
+    const doing = new Map<string, string>()
+    for (const r of shown) {
+      const expected = r.status === 'running' ? agentExpectedMs(locks, tasks, r) : null
+      if (!expected || now - r.startedAt < expected) continue
+      try {
+        const found: unknown = await $.session.messages({ agentId: r.id })
+        const text = activityText(Array.isArray(found) ? found : null)
+        if (text) doing.set(r.id, r.role === 'worker' || r.role === 'test-writer' ? text : `${r.phase}: ${text}`)
+      } catch { /* not readable: keep the task text */ }
+    }
+    const rowTask = (r: Row) => doing.get(r.id) ?? r.task
     const usage = (await $.session.usage()).rateLimits
       .filter((w) => WINDOW[w.kind])
       .map((w) => {
@@ -328,7 +370,13 @@ export const register: Register = (on, options) => {
     const bg = backgroundRows(await read($, background), Boolean(e.props.isWorking), running.length > 0)
     if (bg.length) bgTick ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
     else { bgTick?.cancel(); bgTick = null }
-    const bgElapsed = (t: Background) => span(now - t.startedAt)
+    // A background row: elapsed, and for a command seen before its past median, recalibrated like an agent row.
+    const durations = ((await $.store.get(DURATIONS).catch(() => undefined)) ?? {}) as Record<string, number[]>
+    const bgElapsed = (t: Background) => {
+      const samples = t.key ? durations[t.key] ?? [] : []
+      const live = liveExpected(now - t.startedAt, medianDuration(samples), samples)
+      return `${span(now - t.startedAt)}${live ? `/${live.approx ? '~' : ''}${span(live.ms)}` : ''}`
+    }
     const bgTask = (t: Background) => `${t.kind}: ${t.label}`
     const idle = running.length || bg.length ? '' : ' · idle'
 
@@ -342,11 +390,11 @@ export const register: Register = (on, options) => {
     // Display only: a missing setting shows as the default (on, 90%) and is never written back.
     const enabled = guard.enabled ?? GUARD_DEFAULT.enabled
     const threshold = guard.threshold ?? GUARD_DEFAULT.threshold
-    // The usage line with each percentage bold and colored: plain under 50%, warning from 50% up to the guard
-    // threshold, error at or above it. The rest stays dim.
-    const level = (pct: number) => (pct >= threshold ? 'error' : pct >= 50 ? 'warning' : undefined)
+    // The usage line with each percentage colored: plain under 50%, yellow from 50% up to the guard threshold, red at
+    // or above it. Raw colors, not theme keys: a surface may draw a theme key it does not know as plain text.
+    const level = (pct: number) => (pct >= threshold ? 'red' : pct >= 50 ? 'yellow' : undefined)
     const usageRun = (text: string) => text.split(/(\d+(?:\.\d+)?%)/).map((part, i) => i % 2
-      ? <Text key={`usage-${i}`} bold color={level(Number.parseFloat(part))}>{part}</Text>
+      ? <Text key={`usage-${i}`} color={level(Number.parseFloat(part))}>{part}</Text>
       : part && <Text key={`usage-${i}`} dimColor>{part}</Text>)
 
     if (folded) {
@@ -357,7 +405,7 @@ export const register: Register = (on, options) => {
           <Text bold> model-ladder </Text>
           {usageRun(`── ${usageLine || 'usage unknown'}${last ? ' · ' : ''}`)}
           {last && runs > 1 && <Text dimColor>{runs} runs · </Text>}
-          {last && <Text>{last.cell} · {elapsed(last)} · {fit(last.task, 30).trim()}</Text>}
+          {last && <Text>{last.cell} · {elapsed(last)} · {fit(rowTask(last), 30).trim()}</Text>}
           {bg.length > 0 && <Text> · background · {bgElapsed(bg[0])} · {fit(bgTask(bg[0]), 30).trim()}{bg.length > 1 ? ` +${bg.length - 1}` : ''}</Text>}
         </Box>
       )
@@ -434,9 +482,9 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>
         )}
-        {(shown.length > 0 || bg.length > 0) && row('head', 'model/effort', 'time', 'task', true)}
+        {(shown.length > 0 || bg.length > 0) && row('head', 'model/effort', 'act./est.', 'task', true)}
         {bg.map((t) => row(`background-${t.id}`, 'background', bgElapsed(t), e.surface === 'terminal' ? clip(bgTask(t), taskCols) : bgTask(t)))}
-        {shown.map((r) => row(r.id, r.cell, elapsed(r), e.surface === 'terminal' ? clip(tag(r) + r.task, taskCols) : tag(r) + r.task))}
+        {shown.map((r) => row(r.id, r.cell, elapsed(r), e.surface === 'terminal' ? clip(tag(r) + rowTask(r), taskCols) : tag(r) + rowTask(r)))}
         <Box>
           <Button key="guard" plain label={`usage guard: ${enabled ? 'on' : 'off'}`}
             onPress={() => { void toggle() }} />

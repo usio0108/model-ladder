@@ -37,7 +37,7 @@ Only `VERIFIED` exits with code 0; `DIRECT`, `DIRTY`, `NEEDS_INPUT`, and `STALE_
 Input also accepts JSON on stdin; on Windows, use a UTF-8 input file in the system temp directory.
 
 Reuse the panel across tasks; without a visible terminal, read runner progress in tool output.
-The HUD must launch Codex and cannot attach to an existing session.
+The HUD must launch Codex and cannot attach to an existing session. On Windows the Codex SessionStart hook sets this up by itself: it adds a marked `codex` function to your PowerShell profiles (PowerShell 7 and Windows PowerShell), so from the next new PowerShell window typing `codex` opens the HUD. Subcommands such as `exec` or `login`, redirected input or output, and a missing `node-pty` or Node.js run the native `codex.exe` directly; `node-pty` is installed in the background the first time. Set `"hudTakeover": false` in `~/.codex/model-ladder.json` to remove the function again.
 Windows requires native `codex.exe`, selected through PATH or `CODEX_BINARY`, rather than a `.cmd` or `.bat` shim.
 
 ## Concurrent runs

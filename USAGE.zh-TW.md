@@ -63,7 +63,7 @@ Claude 產生 `.claude/skills/verify/`；Codex 產生 `.agents/skills/verify/`�
 也可從 stdin 傳入 JSON；Windows 請使用系統 temp 目錄內的 UTF-8 輸入檔。
 
 Panel 可跨任務重用，無法顯示終端時改看 tool output 的進度。
-HUD 必須先啟動 Codex，不能附加到已開啟的 session。
+HUD 必須先啟動 Codex，不能附加到已開啟的 session。Windows 上由 Codex 的 SessionStart hook 自動設定：在 PowerShell profile（PowerShell 7 與 Windows PowerShell）加入有標記的 `codex` 函式，之後開新的 PowerShell 視窗輸入 `codex` 就會進入 HUD。`exec`、`login` 等子指令、輸入或輸出被導向、缺少 `node-pty` 或 Node.js 時，直接執行原生 `codex.exe`；`node-pty` 第一次會在背景安裝。在 `~/.codex/model-ladder.json` 設定 `"hudTakeover": false` 即可移除該函式。
 Windows 需使用 PATH 或 `CODEX_BINARY` 指定的原生 `codex.exe`，不接受 `.cmd`、`.bat`。
 
 ## 並行執行

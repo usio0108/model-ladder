@@ -35,12 +35,53 @@ export const agentExpected = (table, phase, model, effort) => {
   return Number.isFinite(ms) && ms > 0 ? ms : null
 }
 
-// A running row's expected duration, recalibrated once the agent overruns it: the expected value while elapsed is
-// below it, else it grows in steps of max(1 minute, half the expected value) to the first value above elapsed, so
-// the denominator jumps in steps and never changes every second. null when the expected value is null or invalid.
-export const liveExpected = (elapsedMs, expectedMs) => {
+// The raw past durations behind one agent's expectation: its phase+model+effort samples, else its phase's; [] when none.
+export const agentSamples = (table, phase, model, effort) => {
+  if (!EXPECTED_PHASES.includes(phase)) return []
+  const list = table?.samples?.[`${phase}/${model}/${effort}`] ?? table?.samples?.[phase]
+  return Array.isArray(list) ? list.filter((ms) => Number.isFinite(ms) && ms > 0) : []
+}
+
+// A running row's expected duration as { ms, approx }, recalibrated once the agent overruns it. While elapsed is below
+// the expected value it is shown as is. Once over, the median of at least 2 past runs (samples, from agentSamples) that
+// took longer than elapsed is used; with fewer it grows in steps of max(1 minute, half the expected value) to the first
+// value above elapsed (approx: true), so the denominator jumps in steps and never changes every second.
+// null when the expected value is null or invalid.
+export const liveExpected = (elapsedMs, expectedMs, samples = []) => {
   if (!Number.isFinite(expectedMs) || expectedMs <= 0) return null
-  if (!(elapsedMs >= expectedMs)) return expectedMs
+  if (!(elapsedMs >= expectedMs)) return { ms: expectedMs, approx: false }
+  const longer = (Array.isArray(samples) ? samples : []).filter((ms) => Number.isFinite(ms) && ms > elapsedMs).sort((a, b) => a - b)
+  if (longer.length >= 2) return { ms: longer[Math.floor(longer.length / 2)], approx: false }
   const step = Math.max(60000, expectedMs / 2)
-  return expectedMs + (Math.floor((elapsedMs - expectedMs) / step) + 1) * step
+  return { ms: expectedMs + (Math.floor((elapsedMs - expectedMs) / step) + 1) * step, approx: true }
+}
+
+// Past durations of background shell commands, keyed by the command's first line: the newest ten per key.
+export const recordDuration = (history, key, ms, keep = 10) => {
+  if (!key || !Number.isFinite(ms) || ms <= 0) return history
+  const past = Array.isArray(history?.[key]) ? history[key] : []
+  return { ...history, [key]: [...past, ms].slice(-keep) }
+}
+
+// The median of past durations, or null without any.
+export const medianDuration = (samples) => {
+  const list = (Array.isArray(samples) ? samples : []).filter((ms) => Number.isFinite(ms) && ms > 0).sort((a, b) => a - b)
+  return list.length ? list[Math.floor(list.length / 2)] : null
+}
+
+// What an agent is doing now, from its messages ($.session.messages({ agentId })): the newest assistant message's
+// last tool use as "<Tool>: <short detail>". null when nothing readable.
+export const activityText = (messages) => {
+  if (!Array.isArray(messages)) return null
+  const use = messages.filter((m) => m?.role === 'assistant' && Array.isArray(m.toolUses) && m.toolUses.length).at(-1)?.toolUses.at(-1)
+  if (typeof use?.tool !== 'string' || !use.tool) return null
+  const input = use.input && typeof use.input === 'object' ? use.input : {}
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+  const base = (p) => str(p)?.split(/[\\/]/).filter(Boolean).at(-1) ?? null
+  const first = (v) => str(v)?.split('\n')[0].trim() ?? null
+  const detail = use.tool === 'Bash' ? str(input.description) ?? first(input.command)
+    : ['Read', 'Edit', 'Write'].includes(use.tool) ? base(input.file_path ?? input.path)
+    : ['Grep', 'Glob'].includes(use.tool) ? str(input.pattern)
+    : null
+  return detail ? `${use.tool}: ${detail}` : use.tool
 }

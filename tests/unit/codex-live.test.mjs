@@ -37,15 +37,26 @@ test('completed rows freeze elapsed time and disappear at ten seconds; active ro
   assert.doesNotMatch(renderLive({ agents: [running] }, { now: start + 12000, guard: { enabled: false } }), /idle|threshold/)
 })
 const NL = String.fromCharCode(10)
+test('an overrun running agent shows ~ when the estimate is approximate, none when history has longer samples', () => {
+  const start = Date.parse('2026-10-23T00:00:00Z')
+  const agent = { phase: 'worker', model: 'luna', effort: 'low', task: 'Fix greeting', startedAt: new Date(start).toISOString(), endedAt: null, pass: null, expectedMs: null }
+  const timeCell = (frame) => frame.split(NL)[2].slice(14).split('  ')[0].trim()
+  const few = { cells: { 'worker/luna/low': 420000 }, phases: {}, samples: { 'worker/luna/low': [420000, 1500000] } }
+  assert.equal(timeCell(renderLive({ agents: [agent], expected: few }, { now: start + 720000 })), '720s/~14m')
+  const many = { cells: { 'worker/luna/low': 420000 }, phases: {}, samples: { 'worker/luna/low': [420000, 1200000, 1800000] } }
+  assert.equal(timeCell(renderLive({ agents: [agent], expected: many }, { now: start + 720000 })), '720s/30m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected: many }, { now: start + 300000 })), '300s/7m')
+})
+
 test('a running agent past its expected duration shows a recalibrated expectation in steps; a finished row keeps the original', () => {
   const start = Date.parse('2026-10-23T00:00:00Z')
   const agent = { phase: 'worker', model: 'luna', effort: 'low', task: 'Fix greeting', startedAt: new Date(start).toISOString(), endedAt: null, pass: null, expectedMs: null }
   const expected = { cells: { 'worker/luna/low': 420000 }, phases: {} }
   const timeCell = (frame) => frame.split(NL)[2].slice(14).split('  ')[0].trim()
   assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 300000 })), '300s/7m')
-  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 720000 })), '720s/14m')
-  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 839000 })), '839s/14m')
-  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 840000 })), '840s/18m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 720000 })), '720s/~14m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 839000 })), '839s/~14m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 840000 })), '840s/~18m')
   // Without an expectation an overrun changes nothing.
   assert.equal(timeCell(renderLive({ agents: [agent] }, { now: start + 720000 })), '720s')
   // A finished row keeps the expected duration it finished with, so the overrun stays visible.
@@ -88,7 +99,7 @@ test('time column shows each agent\'s elapsed over its own expected duration, re
   const long = renderLive({ agents: [agent], expected: { cells: {}, phases: { worker: 90 * 3600000 } } }, { now: start + 100000000, width: 60 })
   assert.equal(timeCell(long), '100000s/4d')
   const header = long.split(NL)[1]
-  assert.ok(header.indexOf('task') - header.indexOf('time') > 9 + 2)
+  assert.ok(header.indexOf('task') - header.indexOf('act./est.') > 9 + 2)
   assert.ok(long.split(NL).every((line) => displayWidth(line) <= 60))
 })
 test('watch flags write the user file, preserve its other settings and leave the project file alone; every invalid threshold exits without writing', () => {

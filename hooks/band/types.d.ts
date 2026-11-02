@@ -16,7 +16,7 @@ export type Row = {
   expectedMs: number | null
 }
 
-export type Background = { id: string; kind: 'shell' | 'workflow'; label: string; startedAt: number }
+export type Background = { id: string; kind: 'shell' | 'workflow' | 'agent'; label: string; startedAt: number; key?: string }
 
 declare module 'claude-code' {
   interface PluginState {

@@ -107,8 +107,8 @@ The band appears above the Claude Code prompt and requires Claude Code 2.1.290+.
 ```text
 ▴ 🟢 model-ladder ── 2h/5h 15% · 3d/7d 44% · ctx 287k/1M (28.7%)
 ▸ worker use ponytail when coding
-model/effort        time     task
-haiku-5.5/low       5s       Summarize the README install steps
+model/effort        act./est.  task
+haiku-5.5/low       5s         Summarize the README install steps
 [usage guard: on]  threshold [90] %  [handoff now]
 ```
 

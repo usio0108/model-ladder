@@ -227,9 +227,9 @@ test('an overrun expected duration is recalibrated in steps for running rows, an
   expect(await show('5m/7m')).toBeDefined()
   // At 12m elapsed the 7m expectation is over: it shows 14m (step 3.5m) and holds until 14m elapsed.
   await clock.advance(420_000)
-  expect(await show('12m/14m')).toBeDefined()
+  expect(await show('12m/~14m')).toBeDefined()
   await clock.advance(120_000)
-  expect(await show('14m/17m')).toBeDefined()
+  expect(await show('14m/~17m')).toBeDefined()
 
   // A finished row keeps the expectation it finished with, so the overrun stays visible.
   await $.turn.complete({ agentId: 'host-a:worker haiku/low', durationMs: 720_000, answer: '' })
@@ -239,7 +239,56 @@ test('an overrun expected duration is recalibrated in steps for running rows, an
   expect(await show('✓ 12m/7m')).toBeDefined()
 })
 
-test('usage percentages are bold and colored by level: plain under 50, warning to the guard threshold, error at it', async ($, on) => {
+test('an overrun row shows ~ when approximate and what the agent is doing now; a non-overrun row keeps the task text', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_700_000_000_000 })
+  mock.env(on, { HOME: '/home/test' })
+  const locks: Record<string, Record<string, unknown>> = {
+    'claude-a.json': lockFile('claude-a', 'Fix greeting', { cells: {}, phases: { worker: 420_000 }, samples: { worker: [420_000, 1_500_000] } } as Expected),
+  }
+  let readable = true
+  const asked: unknown[] = []
+  on('session.cwd', () => ({ value: '/repos/app' }))
+  on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
+  on('session.usage', () => ({ value: { rateLimits: [] } }))
+  on('session.messages', ($, e: any) => {
+    asked.push(e.agentId)
+    return readable
+      ? { value: [{ role: 'assistant', text: '', toolUses: [{ tool_use_id: 't1', tool: 'Read', input: { file_path: '/repos/app/src/greeting.ts' } }, { tool_use_id: 't2', tool: 'Bash', input: { description: 'Run unit tests', command: 'npm test' } }] }] }
+      : { deny: 'not readable' }
+  })
+  on('fs.exists', ($, e) => ({ value: slash(e.path) === '/repos/app/.git' }))
+  on('fs.list', ($, e) => (slash(e.path) === '/repos/app/.model-ladder/runs'
+    ? { value: Object.keys(locks).map((name) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) }
+    : { deny: 'No such directory' }))
+  on('fs.read', ($, e) => {
+    const lock = locks[slash(e.path).split('/').at(-1) ?? '']
+    return slash(e.path).startsWith('/repos/app/.model-ladder/runs/') && lock ? { value: JSON.stringify(lock) } : { deny: 'File does not exist' }
+  })
+  on('agent.spawn', ($, e) => ({ agentId: `${e.workflow?.runId}:${e.description}`, model: 'claude-haiku-5-5' }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.agent.spawn({ subagentType: 'model-ladder:worker', description: 'worker haiku/low', prompt: 'TASK (as the user wrote it)\n  Fix greeting', workflow: { runId: 'host-a' } })
+
+  const show = async (text: string) => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    const found = await ui.find({ type: 'Text', text })
+    await ui.unmount()
+    return found
+  }
+  // Before the expected duration: the task text, and the agent's messages are not read.
+  await clock.advance(300_000)
+  expect(await show('Fix greeting')).toBeDefined()
+  expect(asked).toEqual([])
+  // Overrun with one longer sample only: approximate, and the last tool use replaces the task text.
+  await clock.advance(420_000)
+  expect(await show('12m/~14m')).toBeDefined()
+  expect(await show('Bash: Run unit tests')).toBeDefined()
+  expect(asked.at(-1)).toBe('host-a:worker haiku/low')
+  // Not readable: the task text again.
+  readable = false
+  expect(await show('Fix greeting')).toBeDefined()
+})
+
+test('usage percentages are colored by level, not bold: plain under 50, yellow to the guard threshold, red at it', async ($, on) => {
   mock.clock(on)
   mock.env(on, { HOME: '/home/test' })
   let used = 0
@@ -249,7 +298,7 @@ test('usage percentages are bold and colored by level: plain under 50, warning t
   on('fs.read', () => ({ deny: 'File does not exist' }))
   on('fs.list', () => ({ value: [] }))
 
-  for (const [percent, color] of [[41, undefined], [60, 'warning'], [90, 'error']] as const) {
+  for (const [percent, color] of [[41, undefined], [60, 'yellow'], [90, 'red']] as const) {
     used = percent
     const ui = await $.ui.mount({
       plugin: 'model-ladder', component: 'AbovePrompt', surface: 'terminal',
@@ -257,7 +306,7 @@ test('usage percentages are bold and colored by level: plain under 50, warning t
       props: { hasSurvey: false, isWorking: false, bodyColumns: 80, maxRows: 20, scroll: { offset: 0, bodyRows: 20 }, view: {} },
     })
     const cell = await ui.find({ type: 'Text', text: `${percent}%` })
-    expect(cell?.props.bold).toBe(true)
+    expect(cell?.props.bold).toBeUndefined()
     expect(cell?.props.color).toBe(color)
     expect(await ui.find({ type: 'Text', text: /5h $/ })).toMatchObject({ props: { dimColor: true } })
   }
@@ -319,5 +368,90 @@ test('a running ladder agent row hides background rows', async ($, on) => {
   const ui = await mount(false)
   expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /shell: npm run watch/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a background subagent of the main session shows as an agent row until its turn completes', async ($, on) => {
+  const { mount } = await mountBackground($, on)
+  on('turn.complete', () => ({ text: '' }))
+  await $.agent.spawn({ subagentType: 'general-purpose', description: 'Verify member reorder only', prompt: 'Check only.', background: true })
+  await $.agent.spawn({ subagentType: 'general-purpose', description: 'Foreground helper', prompt: 'Look.' })
+  let ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'agent: Verify member reorder only' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Foreground helper/ })).toBeUndefined()
+  await ui.unmount()
+
+  await $.turn.complete({ agentId: 'undefined:Verify member reorder only', durationMs: 5000, answer: '' })
+  ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a verifier spawned in its own boundary workflow run, with no TASK line, reads the only active lock', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_700_000_000_000 })
+  mock.env(on, { HOME: '/home/test' })
+  let locks: Record<string, Record<string, unknown>> = { 'claude-a.json': lockFile('claude-a', 'Fix greeting', { cells: {}, phases: { worker: 1_320_000, verify: 180_000 } }) }
+  on('session.cwd', () => ({ value: '/repos/app' }))
+  on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
+  on('session.usage', () => ({ value: { rateLimits: [] } }))
+  on('fs.exists', ($, e) => ({ value: slash(e.path) === '/repos/app/.git' }))
+  on('fs.list', ($, e) => (slash(e.path) === '/repos/app/.model-ladder/runs'
+    ? { value: Object.keys(locks).map((name) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) }
+    : { deny: 'No such directory' }))
+  on('fs.read', ($, e) => {
+    const lock = locks[slash(e.path).split('/').at(-1) ?? '']
+    return slash(e.path).startsWith('/repos/app/.model-ladder/runs/') && lock ? { value: JSON.stringify(lock) } : { deny: 'File does not exist' }
+  })
+  on('agent.spawn', ($, e) => ({ agentId: `${e.workflow?.runId}:${e.description}`, model: 'claude-haiku-5-5' }))
+  await $.agent.spawn({ subagentType: 'model-ladder:verifier', description: 'verify haiku/low', prompt: 'You verify one model-ladder attempt.', workflow: { runId: 'boundary-3' } })
+  await clock.advance(2000)
+  let ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: '2s/3m' })).toBeDefined()
+  await ui.unmount()
+
+  // Two active runs and no TASK line: the verifier's run is unknown, so elapsed alone.
+  locks = { ...locks, 'claude-b.json': lockFile('claude-b', 'Other run', { cells: {}, phases: { verify: 600_000 } }) }
+  ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^2s$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a background task stopped with TaskStop leaves the band without a task-notification', async ($, on) => {
+  const { mount } = await mountBackground($, on)
+  on('tool.call', { tool: 'TaskStop' }, () => ({ result: { message: 'stopped' } }))
+  await $.tool.call({ tool: 'Bash', command: 'node --test tests/unit/codex.test.mjs', run_in_background: true })
+  let ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeDefined()
+  await ui.unmount()
+  await $.tool.call({ tool: 'TaskStop', task_id: 'bg-1' })
+  ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a background command seen before shows its past median as the expected duration', async ($, on) => {
+  const { clock, mount } = await mountBackground($, on)
+  const store: Record<string, unknown> = {}
+  on('store.get', ($: any, e: any) => ({ value: store[e.key] }))
+  on('store.set', ($: any, e: any) => { store[e.key] = JSON.parse(JSON.stringify(e.value)); return { value: undefined } })
+  const run = async (ms: number) => {
+    await $.tool.call({ tool: 'Bash', command: 'node --test tests/unit/codex.test.mjs', description: 'Run codex tests', run_in_background: true })
+    await clock.advance(ms)
+    await $.prompt.submit({ text: '<task-id>bg-1</task-id>', origin: { kind: 'task-notification' } })
+  }
+  // First run: no history, elapsed only.
+  await $.tool.call({ tool: 'Bash', command: 'node --test tests/unit/codex.test.mjs', description: 'Run codex tests', run_in_background: true })
+  await clock.advance(60_000)
+  let ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: '1m' })).toBeDefined()
+  await ui.unmount()
+  await clock.advance(780_000)
+  await $.prompt.submit({ text: '<task-id>bg-1</task-id>', origin: { kind: 'task-notification' } })
+  await run(840_000)
+  // Third run: two 14m samples, so 2m elapsed shows 2m/14m.
+  await $.tool.call({ tool: 'Bash', command: 'node --test tests/unit/codex.test.mjs', description: 'Run codex tests', run_in_background: true })
+  await clock.advance(120_000)
+  ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: '2m/14m' })).toBeDefined()
   await ui.unmount()
 })

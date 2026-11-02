@@ -2,7 +2,7 @@ import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { roundSpan } from '../hooks/band/remaining.mjs'
-import { agentExpected, liveExpected } from '../hooks/band/rows.mjs'
+import { agentExpected, agentSamples, liveExpected } from '../hooks/band/rows.mjs'
 
 export function atomicJson(path, value) {
   mkdirSync(dirname(path), { recursive: true })
@@ -64,12 +64,13 @@ export function renderLive(state, { width = 80, now = Date.now(), guard = { enab
   // expectations table, scripts/forecast.mjs agentExpectations) at every render; a finished row keeps agent.expectedMs.
   const times = agents.map((agent) => {
     const seconds = Math.max(0, Math.floor(((agent.endedAt ? Date.parse(agent.endedAt) : now) - Date.parse(agent.startedAt)) / 1000))
-    const ms = agent.endedAt ? agent.expectedMs : liveExpected(seconds * 1000, agentExpected(state?.expected, agent.phase, agent.model, agent.effort))
-    const expected = Number.isFinite(ms) && ms > 0 ? `/${roundSpan(ms)}` : ''
+    const live = agent.endedAt ? null : liveExpected(seconds * 1000, agentExpected(state?.expected, agent.phase, agent.model, agent.effort), agentSamples(state?.expected, agent.phase, agent.model, agent.effort))
+    const ms = agent.endedAt ? agent.expectedMs : live?.ms
+    const expected = Number.isFinite(ms) && ms > 0 ? `/${live?.approx ? '~' : ''}${roundSpan(ms)}` : ''
     return `${agent.endedAt ? agent.pass === false ? '✗ ' : '✓ ' : ''}${seconds}s${expected}`
   })
   const timeWidth = Math.max(12, ...times.map(displayWidth))
-  lines.push(`${pad('model/effort', modelWidth)}  ${pad('time', timeWidth)}  task`)
+  lines.push(`${pad('model/effort', modelWidth)}  ${pad('act./est.', timeWidth)}  task`)
   for (const [i, agent] of agents.entries()) {
     const prefix = `${pad(`${agent.model}/${agent.effort}`, modelWidth)}  ${pad(times[i], timeWidth)}  `
     lines.push(prefix + truncate(`${agent.phase}: ${agent.task}`, Math.max(0, width - displayWidth(prefix))))

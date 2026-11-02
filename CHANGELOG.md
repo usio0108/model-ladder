@@ -4,6 +4,17 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [1.1.3] - 2026-11-02
+
+- Overrun estimates now use history: once an agent row passes its expected duration, the expected value becomes the median of at least 2 past runs that took longer (agentExpectations now also returns the raw samples), else the step estimate shown with a leading `~` (for example `12m/~14m`) in the Claude Code band and the Codex panel; and in the Claude Code band an overrun agent row shows its current tool activity (for example `Bash: Run unit tests`) in place of the task text, falling back to the task text when it cannot be read.
+- Codex on Windows: the SessionStart hook adds a marked `codex` function to the PowerShell profiles, so typing `codex` in a new PowerShell window opens the model-ladder HUD; subcommands, redirected IO and a missing `node-pty` or Node.js run the native `codex.exe`, `node-pty` installs in the background, and `"hudTakeover": false` removes the function. The HUD also falls back to plain Codex when `node-pty` cannot load.
+- Band usage percentages are no longer bold and use raw colors (yellow from 50% up to the usage guard threshold, red at or above it), since some surfaces drew the theme colors as plain text.
+- Background rows also cover subagents the main session starts in the background (the Agent tool with run_in_background): an `agent: <description>` row shows while Claude is idle and leaves when that agent finishes.
+- A background row also leaves when its task is stopped with TaskStop, which sends no task-notification, so stopped tasks no longer linger in the band.
+- A background shell row shows an expected duration once the same command (its first line) has finished before: the median of its last ten runs, kept across sessions and recalibrated like an agent row when overrun; a first run shows elapsed only.
+- The time column header in the Claude Code band and the Codex panel reads `act./est.` (actual elapsed over expected) instead of `time`.
+- Claude Code verifier and diagnosis rows now show their expected duration too: their prompts carry no TASK line and each ladder boundary is its own workflow run, so the band now uses the only active ladder lock when it cannot match a task (two or more active runs still show elapsed only).
+
 ## [1.1.2] - 2026-11-02
 
 - Workers now follow editing rules (Edit/Write or apply_patch only, `uv run` with cleanup, `git status` check before reporting); the router suggests `claude plugin test .` when band files change.

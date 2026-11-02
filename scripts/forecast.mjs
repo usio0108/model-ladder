@@ -82,9 +82,12 @@ export function agentExpectations(rows, runtime, now = Date.now()) {
       add(byPhase, p.phase, p.durationMs)
     }
   }
+  const cells = [...byCell].filter(([, v]) => v.length >= MIN_CELL_SAMPLES)
   return {
-    cells: Object.fromEntries([...byCell].filter(([, v]) => v.length >= MIN_CELL_SAMPLES).map(([k, v]) => [k, median(v)])),
-    phases: Object.fromEntries([...byPhase].map(([k, v]) => [k, median(v)])),
+    cells: Object.fromEntries(cells.map(([k, v]) => [k, median([...v])])),
+    phases: Object.fromEntries([...byPhase].map(([k, v]) => [k, median([...v])])),
+    // The raw durations behind those medians, keyed the same way (cells with enough samples, then every phase), for the band's overrun estimate.
+    samples: { ...Object.fromEntries(cells), ...Object.fromEntries(byPhase) },
   }
 }
 

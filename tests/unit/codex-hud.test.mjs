@@ -233,3 +233,33 @@ test('resize shrinks the pty by the HUD row and redraws the HUD without clobberi
     await running
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })
+
+test('HUD runs plain codex and returns its exit code when node-pty cannot be loaded', async () => {
+  const input = Object.assign(new EventEmitter(), { isTTY: true })
+  const output = Object.assign(new EventEmitter(), { isTTY: true })
+  const calls = []
+  const spawn = (command, args, options) => {
+    calls.push({ command, args, options })
+    const child = new EventEmitter()
+    setImmediate(() => child.emit('close', 7))
+    return child
+  }
+  let notice = ''
+  const stderr = { write(text) { notice += text } }
+  const loadPty = () => Promise.reject(new Error('Cannot find module node-pty'))
+  const result = await runHud({ cwd: process.cwd(), args: ['resume', '--last'], command: process.execPath, input, output, loadPty, spawn, stderr })
+  assert.deepEqual(result, { exitCode: 7 })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].command.toLowerCase(), process.execPath.toLowerCase())
+  assert.deepEqual(calls[0].args, ['resume', '--last'])
+  assert.equal(calls[0].options.stdio, 'inherit')
+  assert.notEqual(calls[0].options.env.MODEL_LADDER_HUD, '1')
+  assert.match(notice, /node-pty/)
+  // A signal exit has no code: report failure rather than success.
+  const killed = () => { const child = new EventEmitter(); setImmediate(() => child.emit('close', null, 'SIGTERM')); return child }
+  assert.deepEqual(await runHud({ command: process.execPath, input, output, loadPty, spawn: killed, stderr }), { exitCode: 1 })
+  const failing = () => { const child = new EventEmitter(); setImmediate(() => child.emit('error', new Error('spawn failed'))); return child }
+  await assert.rejects(runHud({ command: process.execPath, input, output, loadPty, spawn: failing, stderr }), /spawn failed/)
+  // The TTY check still comes first, with or without node-pty.
+  await assert.rejects(runHud({ input: { isTTY: false }, output, loadPty, spawn, stderr }), /interactive terminal/)
+})

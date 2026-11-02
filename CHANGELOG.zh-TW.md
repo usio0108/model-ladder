@@ -4,6 +4,17 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [1.1.3] - 2026-11-02
+
+- 超時估計改用歷史資料：agent 列超過預期時長後，預期值改為至少 2 筆更長的過往紀錄的中位數（agentExpectations 現在也回傳原始樣本），否則顯示階梯式估計並在前面加 `~`（例如 `12m/~14m`），Claude Code band 與 Codex 面板皆適用；Claude Code band 中超時的 agent 列會以目前的工具活動（例如 `Bash: Run unit tests`）取代任務文字，讀不到時退回任務文字。
+- Windows 上的 Codex：SessionStart hook 會在 PowerShell profile 加入有標記的 `codex` 函式，在新的 PowerShell 視窗輸入 `codex` 就會開啟 model-ladder HUD；子指令、輸入輸出被導向、缺少 `node-pty` 或 Node.js 時執行原生 `codex.exe`，`node-pty` 會在背景安裝，設定 `"hudTakeover": false` 即可移除該函式。`node-pty` 無法載入時 HUD 也會改用一般 Codex。
+- band 用量列的百分比不再使用粗體，並改用固定顏色（50% 到用量保護門檻為黃色，達到或超過門檻為紅色），因為部分介面不會套用主題色。
+- 背景列也涵蓋主 session 在背景啟動的 subagent（Agent 工具的 run_in_background）：Claude 閒置時顯示 `agent: <描述>` 列，該 agent 結束後移除。
+- 背景任務被 TaskStop 停止時（不會送出 task-notification），其背景列也會移除，不再殘留在 band 上。
+- 背景 shell 列在同一指令（以第一行為準）曾經跑完後會顯示預期時長：取最近十次的中位數，跨 session 保留，超時時與 agent 列一樣重新估計；第一次執行只顯示經過時間。
+- Claude Code band 與 Codex 面板的時間欄標題由 `time` 改為 `act./est.`（實際經過 / 預估）。
+- Claude Code 的 verifier 與 diagnose 列現在也會顯示預期時長：它們的 prompt 沒有 TASK 行，且每個 ladder 步驟各是一次 workflow run，因此 band 對不到任務時改用唯一進行中的 ladder 鎖（同時有兩個以上的 run 時仍只顯示經過時間）。
+
 ## [1.1.2] - 2026-11-02
 
 - Worker 新增編輯規則（僅用 Edit/Write 或 apply_patch、`uv run` 並清理、回報前檢查 `git status`）；band 檔案變更時 router 會建議 verify 包含 `claude plugin test .`。

@@ -142,6 +142,6 @@ test('agentExpectations: median per phase+model+effort once there are two sample
   assert.equal(agentExpected(table, 'worker', 'haiku', 'low'), 200_000)
   assert.equal(agentExpected(table, 'worker', 'opus', 'high'), 300_000)
   assert.equal(agentExpected(table, 'route', 'haiku', 'low'), null)
-  assert.deepEqual(agentExpectations([], 'claude', NOW), { cells: {}, phases: {} })
+  assert.deepEqual(agentExpectations([], 'claude', NOW), { cells: {}, phases: {}, samples: {} })
   assert.equal(agentExpected(undefined, 'worker', 'haiku', 'low'), null)
 })

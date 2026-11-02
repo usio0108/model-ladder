@@ -2,7 +2,7 @@ import '../helpers/isolate-home.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { durationForecast, remainingForecast, consumptionEvidence, assessUsage, calibrationError } from '../../scripts/ladder-rules.mjs'
-import { routeForecast, withRouterMinutes } from '../../scripts/forecast.mjs'
+import { routeForecast, withRouterMinutes, agentExpectations } from '../../scripts/forecast.mjs'
 
 const now = 10000000
 const route = { estimatedMinutes: 10, optimisticMinutes: 5, pessimisticMinutes: 30 }
@@ -148,4 +148,24 @@ test('router minutes per phase reach the state, and fill only the phases history
   assert.deepEqual(withRouterMinutes(history, minutes), { cells: { 'worker/haiku/low': 1000 }, phases: { worker: 5000, verify: 180000 } })
   assert.deepEqual(withRouterMinutes(history, {}), history)
   assert.deepEqual(withRouterMinutes(history), history)
+})
+
+test('agentExpectations returns the raw samples behind its medians, filtered the same way', () => {
+  const NOW = 1_800_000_000_000
+  const phase = (name, model, effort, durationMs, extra = {}) => ({ phase: name, model, effort, durationMs, complete: true, ...extra })
+  const run = (phases, extra = {}) => ({ forecast: { version: 1, runtime: 'claude', phases, actual: { status: 'VERIFIED', completed: true, censored: false, endedAt: NOW - 1000 }, ...extra } })
+  const rows = [
+    run([phase('worker', 'haiku', 'low', 100_000), phase('worker', 'opus', 'high', 900_000)]),
+    run([phase('worker', 'haiku', 'low', 300_000)]),
+    run([phase('worker', 'haiku', 'low', 9_000_000)], { runtime: 'codex' }),
+    run([phase('worker', 'haiku', 'low', 9_000_000)], { actual: { status: 'FAILED', completed: true, censored: false, endedAt: NOW - 1000 } }),
+    run([phase('worker', 'haiku', 'low', 9_000_000, { complete: false }), phase('worker', 'haiku', 'low', 0)]),
+  ]
+  const table = agentExpectations(rows, 'claude', NOW)
+  assert.deepEqual([...table.samples['worker/haiku/low']].sort((a, b) => a - b), [100_000, 300_000])
+  assert.deepEqual([...table.samples.worker].sort((a, b) => a - b), [100_000, 300_000, 900_000])
+  // A cell with one sample has no cell entry, like the medians.
+  assert.equal(table.samples['worker/opus/high'], undefined)
+  assert.deepEqual(Object.keys(table.samples).sort(), ['worker', 'worker/haiku/low'])
+  assert.deepEqual(agentExpectations([], 'claude', NOW), { cells: {}, phases: {}, samples: {} })
 })
