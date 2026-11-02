@@ -1,5 +1,5 @@
 // Records where a Claude Code run's main session is, in its lock (.model-ladder/runs/<runId>.json), for the band's
-// main-session row between ladder agents.
+// where the main session is between ladder agents.
 // Usage: node phase.mjs <runId> <phase>
 //   needs-input      the main session is asking the user a question
 //   awaiting-finish  the workflow returned; the main session checks the result and runs finish

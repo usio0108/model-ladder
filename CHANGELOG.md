@@ -4,6 +4,17 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [1.1.2] - 2026-11-02
+
+- Workers now follow editing rules (Edit/Write or apply_patch only, `uv run` with cleanup, `git status` check before reporting); the router suggests `claude plugin test .` when band files change.
+- The Claude Code verifier now returns `workerFiles` (the worker's unstaged and untracked paths from `git status`), and with a verify command it passes only when the command succeeds and every ACCEPTANCE item is met; a passing verdict with empty `workerFiles` becomes a failure (`worker changed nothing`) so the ladder escalates.
+- A running agent row whose elapsed time has reached its expected duration now shows a recalibrated expected duration (expected plus whole steps of max(1 minute, half the expected value) until it exceeds elapsed, for example 12m/14m for a 7m expectation) in the Claude Code band and the Codex panel; a finished row keeps its original expected duration.
+- The Claude Code band replaces the lock-based `no model` row with background rows: one `background` row (elapsed time and `<kind>: <label>`) per in-flight Bash background task or async Workflow launch of this session, shown only while Claude is not running a turn and no ladder agent runs, and removed when the task's notification arrives. The `direct` phase and `phase.mjs <runId> direct` step are removed.
+- Only worker, test-writer and verifier rows show an expected duration; router, diagnose and final-diagnosis rows show elapsed time only.
+- The router also returns `workerMinutes` and `verifyMinutes` (positive integer wall-clock minutes for one worker attempt and one verification). The plan carries them into the run lock's per-agent table as the expectation for a phase history has no sample for, so worker and verifier rows have an expected duration from the first run. History samples (phase plus model/effort, then phase) still take priority.
+- The Codex router returns `workerMinutes` and `verifyMinutes` too (positive integers, schema-checked); after routing they fill the Codex panel's per-agent table only for a worker or verify phase history has no sample for, so the first Codex run shows elapsed/expected on worker and verifier rows.
+- The band usage line shows each percentage bold and colored: plain under 50%, warning from 50% up to the usage guard threshold, error at or above it; the rest stays dim. The instructions row leaves a space after its fold arrow.
+
 ## [1.1.1] - 2026-11-02
 
 - The time column of each agent row (router, worker, test-writer, verifier) in the Claude Code band and the Codex panel now shows that agent's own elapsed time over its own expected duration, not over the whole run's forecast total. The expected duration is the median of earlier comparable successful runs' phase timings, keyed by phase plus model/effort once there are two samples and by phase alone before that; with no samples only elapsed time shows.

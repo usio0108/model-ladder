@@ -4,6 +4,17 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [1.1.2] - 2026-11-02
+
+- Worker 新增編輯規則（僅用 Edit/Write 或 apply_patch、`uv run` 並清理、回報前檢查 `git status`）；band 檔案變更時 router 會建議 verify 包含 `claude plugin test .`。
+- Claude Code verifier 現在回傳 `workerFiles`（`git status` 中 worker 自己的未暫存與未追蹤路徑），有 verify 指令時須指令成功且每項 ACCEPTANCE 都達成才通過；通過但 `workerFiles` 為空的判定會改為失敗（`worker changed nothing`），讓 ladder 升級。
+- Claude Code band 與 Codex 面板中，執行中的 agent 列的經過時間達到預期時長後，會顯示重新估計的預期時長（預期值加上整數個步長，步長為 1 分鐘與預期值一半中較大者，直到超過經過時間，例如預期 7m 顯示 12m/14m）；已結束的列保留原本的預期時長。
+- Claude Code band 以背景列取代依鎖產生的 `no model` 列：本 session 每個進行中的 Bash 背景工作或非同步 Workflow 啟動各顯示一列 `background`（經過時間與 `<kind>: <label>`），只在 Claude 沒有執行回合且沒有 ladder agent 執行時顯示，收到該工作的通知後移除。`direct` 階段與 `phase.mjs <runId> direct` 步驟一併移除。
+- 只有 worker、test-writer、verifier 的列顯示預期時長；router、diagnose、final diagnosis 的列只顯示經過時間。
+- router 另外回傳 `workerMinutes` 與 `verifyMinutes`（單次 worker 嘗試與單次驗證的正整數實際分鐘數）。plan 會把它們寫入 run 鎖的各 agent 表，作為歷史沒有樣本的階段的預期值，讓 worker 與 verifier 列從第一次 run 起就有預期時長。歷史樣本（階段加模型/effort，其次依階段）仍然優先。
+- Codex router 也會回傳 `workerMinutes` 與 `verifyMinutes`（正整數，schema 會檢查）；路由後只在歷史沒有 worker 或 verify 樣本時補進 Codex 面板的各 agent 預期表，讓第一次 Codex run 的 worker 與 verifier 列就顯示「已跑 / 預估」。
+- band 用量列的百分比改為粗體並依程度上色：低於 50% 維持一般顏色，50% 到用量保護門檻為警告色，達到或超過門檻為錯誤色；其餘文字維持淡色。指示列的摺疊箭頭後面多留一格空白。
+
 ## [1.1.1] - 2026-11-02
 
 - Claude Code band 與 Codex 面板中每個 agent 列（router、worker、test-writer、verifier）的時間欄，改為顯示「該 agent 自己的經過時間 / 自己的預期時長」，不再以整個 run 的預估總時長為分母。預期時長取自先前可比較成功 run 的階段計時中位數：有兩筆樣本時依「階段加模型/effort」，之前只依階段；沒有樣本時只顯示經過時間。

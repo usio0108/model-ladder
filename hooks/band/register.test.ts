@@ -90,52 +90,11 @@ for (const scenario of [
   })
 }
 
-test('main-session row while a run lock exists and no agent runs; idle once the lock is gone', async ($, on) => {
-  const NOW = 1_700_000_000_000
-  mock.clock(on, { now: NOW })
-  mock.env(on, { HOME: '/home/test' })
-  const startedAt = new Date(NOW - (4 * 60 + 12) * 1000).toISOString()
-  let lock: Record<string, unknown> | null = null
-  on('session.cwd', () => ({ value: '/repos/app/px2' }))
-  on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
-  on('session.usage', () => ({ value: { rateLimits: [] } }))
-  on('fs.exists', ($, e) => ({ value: slash(e.path) === '/repos/app/.git' }))
-  on('fs.list', ($, e) => (slash(e.path) === '/repos/app/.model-ladder/runs' && lock
-    ? { value: [{ name: 'claude-1.json', kind: 'file', size: 1, mtimeMs: 0, isLink: false }, { name: 'registry.lock', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] }
-    : { deny: 'No such directory' }))
-  on('fs.read', ($, e) => (slash(e.path) === '/repos/app/.model-ladder/runs/claude-1.json' && lock
-    ? { value: JSON.stringify(lock) }
-    : { deny: 'File does not exist' }))
-
-  for (const surface of ['terminal', 'desktop'] as const) {
-    lock = { runId: 'claude-1', runtime: 'claude', pid: null, task: 'fix the login bug', phase: 'needs-input', startedAt }
-    let ui = await $.ui.mount({ ...BAND, surface })
-    expect(await ui.find({ key: 'main-session' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'no model' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '4m' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /needs-input: fix the login bug/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /· idle/ })).toBeUndefined()
-    await ui.unmount()
-
-    lock = { ...lock, phase: 'awaiting-finish' }
-    ui = await $.ui.mount({ ...BAND, surface })
-    expect(await ui.find({ type: 'Text', text: /awaiting-finish: fix the login bug/ })).toBeDefined()
-    await ui.unmount()
-
-    // finish removed the lock: the run is over.
-    lock = null
-    ui = await $.ui.mount({ ...BAND, surface })
-    expect(await ui.find({ key: 'main-session' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: 'no model' })).toBeUndefined()
-    expect(await ui.find({ type: 'Text', text: /· idle/ })).toBeDefined()
-    await ui.unmount()
-  }
-})
 
 // Locks as scripts/preflight.mjs writes them. scripts/forecast.mjs adds phaseExpected (each agent's expected duration) at
 // every boundary and expectedMs (the run's forecast total) once routing has one.
 type Expected = { cells: Record<string, number>; phases: Record<string, number> }
-const lockFile = (runId: string, task: string, phaseExpected?: Expected, expectedMs?: number) => ({ runId, runtime: 'claude', pid: null, task, phase: 'claimed', startedAt: new Date(1_700_000_000_000 - 60_000).toISOString(), ...(phaseExpected && { phaseExpected }), ...(expectedMs && { expectedMs }) })
+const lockFile = (runId: string, task: string, phaseExpected?: Expected, expectedMs?: number, phase = 'claimed') => ({ runId, runtime: 'claude', pid: null, task, phase, startedAt: new Date(1_700_000_000_000 - 60_000).toISOString(), ...(phaseExpected && { phaseExpected }), ...(expectedMs && { expectedMs }) })
 
 test('time column shows each agent\'s elapsed over its own expected duration, read live, elapsed alone when unknown, and a finished row keeps its value', async ($, on) => {
   const clock = mock.clock(on, { now: 1_700_000_000_000 })
@@ -208,21 +167,157 @@ test('time column shows each agent\'s elapsed over its own expected duration, re
   await frozen.unmount()
 })
 
-test('time column is wider than 9 and the main-session row shows its run\'s expected total', async ($, on) => {
-  mock.clock(on, { now: 1_700_000_000_000 })
+test('router, diagnose and final-diagnosis rows show elapsed only, whatever the table holds for their phase', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_700_000_000_000 })
   mock.env(on, { HOME: '/home/test' })
-  const lock = lockFile('claude-1', 'fix the login bug', undefined, 720_000)
+  const lock = lockFile('claude-a', 'Fix greeting', { cells: { 'route/haiku/low': 600_000 }, phases: { route: 600_000, diagnose: 600_000, final: 600_000, worker: 300_000 } })
   on('session.cwd', () => ({ value: '/repos/app' }))
   on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
   on('session.usage', () => ({ value: { rateLimits: [] } }))
   on('fs.exists', ($, e) => ({ value: slash(e.path) === '/repos/app/.git' }))
   on('fs.list', ($, e) => (slash(e.path) === '/repos/app/.model-ladder/runs'
-    ? { value: [{ name: 'claude-1.json', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] }
+    ? { value: [{ name: 'claude-a.json', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] }
     : { deny: 'No such directory' }))
-  on('fs.read', ($, e) => (slash(e.path) === '/repos/app/.model-ladder/runs/claude-1.json' ? { value: JSON.stringify(lock) } : { deny: 'File does not exist' }))
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: '1m/12m' })).toBeDefined()
-  const main = await ui.find({ key: 'main-session' })
-  expect(main?.children?.[1]?.props.width).toBeGreaterThan(9)
+  on('fs.read', ($, e) => (slash(e.path) === '/repos/app/.model-ladder/runs/claude-a.json' ? { value: JSON.stringify(lock) } : { deny: 'File does not exist' }))
+  on('agent.spawn', ($, e) => ({ agentId: `${e.workflow?.runId}:${e.description}`, model: 'claude-haiku-5-5' }))
+  on('turn.complete', () => ({ text: '' }))
+  const spawn = (description: string, type: string) => $.agent.spawn({ subagentType: `model-ladder:${type}`, description, prompt: 'TASK (as the user wrote it)\n  Fix greeting', workflow: { runId: 'host-a' } })
+  await spawn('route haiku/low', 'router')
+  await spawn('diagnose haiku/low', 'router')
+  await spawn('final diagnosis haiku/low', 'router')
+  await spawn('worker haiku/low', 'worker')
+  await clock.advance(5000)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    expect(await ui.findAll({ type: 'Text', text: /^5s$/ })).toHaveLength(3)
+    expect(await ui.findAll({ type: 'Text', text: '5s/5m' })).toHaveLength(1)
+    expect(await ui.find({ type: 'Text', text: /[/]10m/ })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test('an overrun expected duration is recalibrated in steps for running rows, and a finished row keeps its original value', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_700_000_000_000 })
+  mock.env(on, { HOME: '/home/test' })
+  const locks: Record<string, Record<string, unknown>> = {
+    'claude-a.json': lockFile('claude-a', 'Fix greeting', { cells: {}, phases: { worker: 420_000 } }),
+  }
+  on('session.cwd', () => ({ value: '/repos/app' }))
+  on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
+  on('session.usage', () => ({ value: { rateLimits: [] } }))
+  on('fs.exists', ($, e) => ({ value: slash(e.path) === '/repos/app/.git' }))
+  on('fs.list', ($, e) => (slash(e.path) === '/repos/app/.model-ladder/runs'
+    ? { value: Object.keys(locks).map((name) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) }
+    : { deny: 'No such directory' }))
+  on('fs.read', ($, e) => {
+    const lock = locks[slash(e.path).split('/').at(-1) ?? '']
+    return slash(e.path).startsWith('/repos/app/.model-ladder/runs/') && lock ? { value: JSON.stringify(lock) } : { deny: 'File does not exist' }
+  })
+  on('agent.spawn', ($, e) => ({ agentId: `${e.workflow?.runId}:${e.description}`, model: 'claude-haiku-5-5' }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.agent.spawn({ subagentType: 'model-ladder:worker', description: 'worker haiku/low', prompt: 'TASK (as the user wrote it)\n  Fix greeting', workflow: { runId: 'host-a' } })
+
+  const show = async (text: string) => {
+    const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    const found = await ui.find({ type: 'Text', text })
+    await ui.unmount()
+    return found
+  }
+  await clock.advance(300_000)
+  expect(await show('5m/7m')).toBeDefined()
+  // At 12m elapsed the 7m expectation is over: it shows 14m (step 3.5m) and holds until 14m elapsed.
+  await clock.advance(420_000)
+  expect(await show('12m/14m')).toBeDefined()
+  await clock.advance(120_000)
+  expect(await show('14m/17m')).toBeDefined()
+
+  // A finished row keeps the expectation it finished with, so the overrun stays visible.
+  await $.turn.complete({ agentId: 'host-a:worker haiku/low', durationMs: 720_000, answer: '' })
+  expect(await show('✓ 12m/7m')).toBeDefined()
+  locks['claude-a.json'] = lockFile('claude-a', 'Fix greeting', { cells: {}, phases: { worker: 60_000 } })
+  await clock.advance(2000)
+  expect(await show('✓ 12m/7m')).toBeDefined()
+})
+
+test('usage percentages are bold and colored by level: plain under 50, warning to the guard threshold, error at it', async ($, on) => {
+  mock.clock(on)
+  mock.env(on, { HOME: '/home/test' })
+  let used = 0
+  on('session.cwd', () => ({ value: '/repos/model-ladder' }))
+  on('session.repo', () => ({ value: { root: '/repos/model-ladder', remote: null } }))
+  on('session.usage', () => ({ value: { rateLimits: [{ kind: 'five_hour', percentUsed: used, resetsAt: null }] } }))
+  on('fs.read', () => ({ deny: 'File does not exist' }))
+  on('fs.list', () => ({ value: [] }))
+
+  for (const [percent, color] of [[41, undefined], [60, 'warning'], [90, 'error']] as const) {
+    used = percent
+    const ui = await $.ui.mount({
+      plugin: 'model-ladder', component: 'AbovePrompt', surface: 'terminal',
+      requestId: `band-usage-${percent}`, viewport: { columns: 80, rows: 20 },
+      props: { hasSurvey: false, isWorking: false, bodyColumns: 80, maxRows: 20, scroll: { offset: 0, bodyRows: 20 }, view: {} },
+    })
+    const cell = await ui.find({ type: 'Text', text: `${percent}%` })
+    expect(cell?.props.bold).toBe(true)
+    expect(cell?.props.color).toBe(color)
+    expect(await ui.find({ type: 'Text', text: /5h $/ })).toMatchObject({ props: { dimColor: true } })
+  }
+})
+
+// Background rows: one per in-flight background task, only while Claude is not working and no ladder agent runs.
+const mountBackground = async ($: any, on: any) => {
+  const clock = mock.clock(on, { now: 1_700_000_000_000 })
+  mock.env(on, { HOME: '/home/test' })
+  on('session.cwd', () => ({ value: '/repos/app' }))
+  on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
+  on('session.usage', () => ({ value: { rateLimits: [] } }))
+  on('fs.exists', ($: any, e: any) => ({ value: slash(e.path) === '/repos/app/.git' }))
+  on('tool.call', { tool: 'Bash' }, ($: any, e: any) => ({ result: e.run_in_background ? { backgroundTaskId: 'bg-1' } : { stdout: 'ok' } }))
+  on('tool.call', { tool: 'Workflow' }, () => ({ result: { status: 'async_launched', taskId: 'wf-1', workflowName: 'ladder' } }))
+  on('prompt.submit', ($: any, e: any) => ({ text: e.text }))
+  on('agent.spawn', ($: any, e: any) => ({ agentId: `${e.workflow?.runId}:${e.description}`, model: 'claude-haiku-5-5' }))
+  return { clock, mount: (isWorking = false) => $.ui.mount({ ...BAND, surface: 'desktop', props: { ...BAND.props, isWorking } }) }
+}
+const notify = ($: any, ids: string[]) => $.prompt.submit({ text: ids.map((id) => `<task-id>${id}</task-id>`).join('\n'), origin: { kind: 'task-notification' } })
+
+test('a Bash background call adds a row only while Claude is not working, and a task-notification removes it', async ($, on) => {
+  const { clock, mount } = await mountBackground($, on)
+  await $.tool.call({ tool: 'Bash', command: 'npm run watch\nsecond line', run_in_background: true })
+  await $.tool.call({ tool: 'Bash', command: 'ls' })
+  await clock.advance(65_000)
+
+  let ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'shell: npm run watch' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /· idle/ })).toBeUndefined()
+  await ui.unmount()
+
+  ui = await mount(true)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  await ui.unmount()
+
+  await notify($, ['bg-1'])
+  ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /· idle/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an async Workflow launch adds a workflow row', async ($, on) => {
+  const { mount } = await mountBackground($, on)
+  await $.tool.call({ tool: 'Workflow', workflow: 'ladder' })
+  const ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'workflow: ladder' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a running ladder agent row hides background rows', async ($, on) => {
+  const { mount } = await mountBackground($, on)
+  await $.tool.call({ tool: 'Bash', command: 'npm run watch', run_in_background: true })
+  await $.agent.spawn({ subagentType: 'model-ladder:worker', description: 'worker haiku/low', prompt: 'TASK (as the user wrote it)\n  Fix greeting', workflow: { runId: 'host-a' } })
+  const ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /shell: npm run watch/ })).toBeUndefined()
   await ui.unmount()
 })

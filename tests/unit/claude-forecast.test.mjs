@@ -27,7 +27,7 @@ test('Claude preflight, real boundary CLI, workflow journal and finish persist c
   const read = (path) => JSON.parse(readFileSync(path, 'utf8'))
   const route = { model: 'haiku', effort: 'low', reason: 'report', goal: 'Inspect fixture', scope: [],
     verify: null, acceptance: ['Report repository state'], allowTests: false, allowTestsReason: 'report', question: null,
-    small: false, smallReason: '', readOnly: true, estimatedMinutes: 30, optimisticMinutes: 10, pessimisticMinutes: 60 }
+    small: false, smallReason: '', readOnly: true, estimatedMinutes: 30, optimisticMinutes: 10, pessimisticMinutes: 60, workerMinutes: 12, verifyMinutes: 3 }
   const calls = []
   const agent = async (_prompt, opts) => {
     calls.push(opts.label.split(' ')[0])
@@ -54,6 +54,20 @@ test('Claude preflight, real boundary CLI, workflow journal and finish persist c
         assert.deepEqual(Object.keys(lock.phaseExpected.cells), [])
         assert.deepEqual(Object.keys(lock.phaseExpected.phases).sort(), journeyNo === 1 ? [] : ['route', 'verify', 'worker'])
         assert.equal(agentExpected(lock.phaseExpected, 'worker', 'haiku', 'low'), journeyNo === 1 ? null : lock.phaseExpected.phases.worker)
+      }
+      if (i === 1) {
+        // After routing the lock also carries the router's minutes for one worker attempt and one verification, but only for
+        // a phase history has no sample for: the first run has none, the second run's own samples win.
+        const phases = lock.phaseExpected.phases
+        if (journeyNo === 1) {
+          assert.deepEqual(phases, { worker: 720000, verify: 180000 })
+          assert.equal(agentExpected(lock.phaseExpected, 'worker', 'haiku', 'low'), 720000)
+          assert.equal(agentExpected(lock.phaseExpected, 'verify', 'haiku', 'low'), 180000)
+        } else {
+          assert.ok(phases.worker > 0 && phases.worker < 720000 && phases.verify > 0 && phases.verify < 180000)
+        }
+        assert.equal(agentExpected(lock.phaseExpected, 'route', 'haiku', 'low'), null)
+        assert.equal(read(statePath).forecast.workerMinutes, 12)
       }
       let spent = 0
       result = await workflow(args, async (...a) => { spent += 10; return agent(...a) }, { spent: () => spent }, () => {}, () => {})

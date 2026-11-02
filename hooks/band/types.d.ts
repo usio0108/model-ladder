@@ -16,8 +16,10 @@ export type Row = {
   expectedMs: number | null
 }
 
+export type Background = { id: string; kind: 'shell' | 'workflow'; label: string; startedAt: number }
+
 declare module 'claude-code' {
   interface PluginState {
-    'model-ladder': { rows: Row[]; isFolded: boolean; areSkillsFolded: boolean; contextText: string }
+    'model-ladder': { rows: Row[]; background: Background[]; isFolded: boolean; areSkillsFolded: boolean; contextText: string }
   }
 }

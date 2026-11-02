@@ -214,8 +214,10 @@ const ROUTE_SCHEMA = {
     estimatedMinutes: { type: 'integer' },
     optimisticMinutes: { type: 'integer' },
     pessimisticMinutes: { type: 'integer' },
+    workerMinutes: { type: 'integer' },
+    verifyMinutes: { type: 'integer' },
   },
-  required: ['model', 'effort', 'reason', 'goal', 'scope', 'verify', 'acceptance', 'allowTests', 'allowTestsReason', 'question', 'small', 'smallReason', 'estimatedMinutes', 'optimisticMinutes', 'pessimisticMinutes'],
+  required: ['model', 'effort', 'reason', 'goal', 'scope', 'verify', 'acceptance', 'allowTests', 'allowTestsReason', 'question', 'small', 'smallReason', 'estimatedMinutes', 'optimisticMinutes', 'pessimisticMinutes', 'workerMinutes', 'verifyMinutes'],
 }
 
 const WORKER_SCHEMA = {
@@ -237,8 +239,9 @@ const VERDICT_SCHEMA = {
     pass: { type: 'boolean' },
     reason: { type: 'string' },
     output: { type: 'string' },
+    workerFiles: { type: 'array', items: { type: 'string' } },
   },
-  required: ['pass', 'reason', 'output'],
+  required: ['pass', 'reason', 'output', 'workerFiles'],
 }
 
 // preflight always passes usageGuard.command; the verifier runs it last and reports the guard settings and
@@ -332,7 +335,7 @@ async function route() {
   const { task, config } = args
   const verifyKnown = config.verify ? `The project sets the verify command: ${config.verify}` :
     args.hasVerifySkill ? 'The project has a verify skill; set verify to null, it will be used.' :
-    'Find the verify command the repo already has (a test suite in pyproject.toml, package.json, Makefile, pom.xml, ...). It must run checks that exist before this task. Never write a new check yourself, not even a one-line assert: that would let you, not the user, define done. Use null if the repo has no tests that cover this task. With no project verify, pick only targeted, fast existing tests that cover this change: list the relevant test files or globs (for example node --test tests/unit/a.test.mjs tests/unit/b.test.mjs, pytest tests/test_x.py, npm test -- path), never the whole suite or a bare directory; leave the full suite to CI. Never run node --test <directory>: Node 24 treats a directory as a module and fails, so list files or use a glob. If the task text already gives a verify command, use it as given.'
+    'Find the verify command the repo already has (a test suite in pyproject.toml, package.json, Makefile, pom.xml, ...). It must run checks that exist before this task. Never write a new check yourself, not even a one-line assert: that would let you, not the user, define done. Use null if the repo has no tests that cover this task. With no project verify, pick only targeted, fast existing tests that cover this change: list the relevant test files or globs (for example node --test tests/unit/a.test.mjs tests/unit/b.test.mjs, pytest tests/test_x.py, npm test -- path), never the whole suite or a bare directory; leave the full suite to CI. Never run node --test <directory>: Node 24 treats a directory as a module and fails, so list files or use a glob. If the task text already gives a verify command, use it as given. When the task changes hooks/band/register.tsx or hooks/band/register.test.ts in a plugin repo whose .claude-plugin has hooks *.test.ts files, the verify command should include `claude plugin test .` (it runs the band tests in the Claude Code host) instead of excluding register.test.ts.'
   const prompt = `You are the router of model-ladder. Read the task and the repo (read-only), then pick where the work starts.
 
 TASK
@@ -355,7 +358,8 @@ Also return:
 - small: true when the task touches one or two files and its design is already given (for example "implement this function as described"), so a capable model would finish it in one pass. Otherwise false.
 - smallReason: one sentence on why.
 - readOnly: true when the task only reads and reports (a review, an analysis, a question) and edits no file. Otherwise false.
-- estimatedMinutes (most likely), optimisticMinutes and pessimisticMinutes: positive integer wall-clock minutes for the FULL run, including routing, implementation, worker self-checks, test commands, independent verification, diagnosis and retry risk. Give an honest ordered range, not a guarantee.`
+- estimatedMinutes (most likely), optimisticMinutes and pessimisticMinutes: positive integer wall-clock minutes for the FULL run, including routing, implementation, worker self-checks, test commands, independent verification, diagnosis and retry risk. Give an honest ordered range, not a guarantee.
+- workerMinutes and verifyMinutes: positive integer wall-clock minutes for ONE worker attempt (implementation and its self-checks) and for ONE independent verification run, so the band can show an expected duration before any history exists.`
   const { result: r, error, limit, tokens } = await measured(prompt, {
     label: `route ${label(config.router)}`, phase: 'Route', schema: ROUTE_SCHEMA, agentType: 'model-ladder:router', ...config.router,
   })
@@ -383,6 +387,8 @@ Also return:
     estimatedMinutes: r.estimatedMinutes,
     optimisticMinutes: r.optimisticMinutes,
     pessimisticMinutes: r.pessimisticMinutes,
+    workerMinutes: r.workerMinutes,
+    verifyMinutes: r.verifyMinutes,
     directReason: `${r.smallReason} The calling session holds about ${args.contextTokens} tokens of context, ${Math.round(contextPercent(args.contextTokens, args.contextWindow))}% of a ${args.contextWindow > 0 ? args.contextWindow : DEFAULT_WINDOW}-token window; the DIRECT threshold is ${args.directThreshold === 'off' ? 'off' : `${args.directThreshold ?? DEFAULT_DIRECT_THRESHOLD}%`}.`,
     // Without a verify step the user, not the router, decides what done means.
     needsAcceptance: !verify && !args.acceptance?.length,
@@ -433,6 +439,7 @@ function brief(plan, history, hint) {
   }
   const skills = skillsSection(args.skills?.worker)
   if (skills) sections.push(skills)
+  sections.push('EDITING RULES\n  Edit files with the Edit/Write tools, never through an interpreter one-off (python/node -e/sed scripts) whose failure can be silent.\n  If Python is genuinely needed, run it with `uv run` (ephemeral). If the project did not already use Python, delete everything that run created (.venv, uv.lock, __pycache__, scratch scripts) before reporting.\n  Before reporting done, run `git status --porcelain --untracked-files=all` in the worktree and confirm every file you claim in filesChanged shows a worker change (second column not a space, or ??).')
   sections.push('REPORT\n  worktreePath: the output of `git rev-parse --show-toplevel` (not pwd).\n  status "blocked" only if the task cannot be done; say why in blockedReason. In summary, include concise handoff context: progress, decisions, user constraints supplied in TASK, cautions, failed approaches, and next steps. Separate verified work from unverified claims. Do not infer parent conversation context.')
   return sections.join('\n\n')
 }
@@ -447,7 +454,8 @@ function verifyPrompt(plan, work) {
 1. ${args.setupPatch ? 'Confirm the setup patch is applied (the user\'s changes are present in the files it touches). If not, fail with reason "setup patch not applied". The user\'s starting changes are staged; the worker\'s changes are `git diff` (unstaged) plus untracked files, the `??` lines of step 2. Judge only those.' : 'Skip.'}
 2. Run \`git -C "${work.worktreePath}" status --porcelain --untracked-files=all\`. If any changed or new file matches one of these globs, fail with reason "modified protected file <path>": ${plan.protected.join(', ') || '(none)'}${setup}
    Ignore build artifacts that running code rewrites: ${ARTIFACTS.join(', ')}
-3. ${plan.verify ? `Run the verify step from the worktree root: ${plan.verify}\n   Pass only if it succeeds.` : 'There is no verify command. Judge each ACCEPTANCE item against the worker\'s changes (`git diff` plus new files). If the attempt changed no files, the task is read-only and the worker report below is the deliverable: judge it instead, and spot-check its claims against the sources it cites. Be strict: pass only if every item is clearly met.'}
+   Fill workerFiles from this output with only the worker's own paths: lines whose second (worktree) column is not a space, plus \`??\` lines. Leave out paths matching the build-artifact globs above, and leave out staged-only lines (second column a space): those are the user's setup patch.
+3. ${plan.verify ? `Run the verify step from the worktree root: ${plan.verify}\n   Pass only if it succeeds AND the worker's changes (\`git diff\` plus new files) meet every ACCEPTANCE item below.` : 'There is no verify command. Judge each ACCEPTANCE item against the worker\'s changes (`git diff` plus new files). If the attempt changed no files, the task is read-only and the worker report below is the deliverable: judge it instead, and spot-check its claims against the sources it cites. Be strict: pass only if every item is clearly met.'}
 
 ACCEPTANCE
 ${bullets(plan.acceptance)}
@@ -538,6 +546,10 @@ async function run(plan) {
       verifyTokens = verifier.tokens
       verdict = verifier.result ?? { pass: false, reason: `verifier ${verifier.error}`, output: '' }
       limited = verifier.limit && limitFinal(`verifier ${label(verifierCell)}`, verifier.limit)
+      // The workflow cannot run git; the verifier's workerFiles is the only proof the worktree changed.
+      if (plan.verify && verdict.pass && !verdict.workerFiles?.length) {
+        verdict = { pass: false, reason: 'worker changed nothing (verifier saw no unstaged or untracked changes)', output: verdict.output }
+      }
     }
     tokens += verifyTokens
     const attempt = { cell, work, verdict, diagnosis: null, tokens: worker.tokens + verifyTokens }

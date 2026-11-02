@@ -62,7 +62,7 @@ test('same package identity/version and generated rules do not drift', () => {
   execFileSync(process.execPath, ['scripts/sync-rules.mjs', '--check'], { cwd: root })
 })
 test('first pass applies incremental changes, ignores benign stderr, records usage and leaves index unchanged', async () => {
-  const dir = fixture({ warning: true, newUntracked: true })
+  const dir = fixture({ warning: true, newUntracked: true, workerMinutes: 4, verifyMinutes: 2 })
   const index = git(dir, 'write-tree')
   const result = await run(dir)
   assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
@@ -73,7 +73,48 @@ test('first pass applies incremental changes, ignores benign stderr, records usa
   assert.equal(result.usage[0].turns[0].output_tokens, 5)
   assert.deepEqual(calls(dir).map((c) => [c.phase, c.sandbox]), [['route', 'read-only'], ['worker', 'workspace-write'], ['verify', 'workspace-write']])
   assert.ok(calls(dir).every((call) => call.prompt.startsWith('This is one internal model-ladder role. Do not invoke model-ladder')))
+  assert.deepEqual(JSON.parse(read(dir, '.model-ladder/live.json')).expected.phases, { worker: 240000, verify: 120000 })
+  assert.match(calls(dir)[0].prompt, /workerMinutes and verifyMinutes as positive integer/)
   cleaned(dir)
+})
+
+test('Codex worker prompt carries the editing rules', async () => {
+  const dir = fixture({})
+  await run(dir)
+  const prompt = calls(dir).find((c) => c.phase === 'worker').prompt
+  assert.match(prompt, /apply_patch/)
+  assert.match(prompt, /`uv run`/)
+  assert.match(prompt, /\.venv, uv\.lock/)
+  assert.match(prompt, /git status --porcelain --untracked-files=all/)
+})
+test('historical phase medians take precedence over first-run router estimates', async () => {
+  const dir = fixture({ workerMinutes: 8, verifyMinutes: 6 })
+  const endedAt = Date.now() - 1000
+  const history = [
+    { runtime: 'codex', forecast: { version: 1, runtime: 'codex', actual: { status: 'VERIFIED', completed: true, censored: false, endedAt }, phases: [
+      { phase: 'worker', model: 'cheap', effort: 'low', durationMs: 60000, complete: true },
+      { phase: 'verify', model: 'cheap', effort: 'low', durationMs: 30000, complete: true },
+    ] } },
+    { runtime: 'codex', forecast: { version: 1, runtime: 'codex', actual: { status: 'VERIFIED', completed: true, censored: false, endedAt }, phases: [
+      { phase: 'worker', model: 'cheap', effort: 'low', durationMs: 120000, complete: true },
+      { phase: 'verify', model: 'cheap', effort: 'low', durationMs: 90000, complete: true },
+    ] } },
+  ]
+  write(dir, '.model-ladder/history.jsonl', history.map((row) => JSON.stringify(row)).join('\n') + '\n')
+  assert.equal((await run(dir)).status, 'VERIFIED')
+  const { expected } = JSON.parse(read(dir, '.model-ladder/live.json'))
+  assert.deepEqual(expected.phases, { worker: 120000, verify: 90000 })
+  assert.deepEqual(expected.cells, { 'worker/cheap/low': 120000, 'verify/cheap/low': 90000 })
+  cleaned(dir)
+})
+
+test('Codex route requires positive worker and verifier estimates', () => {
+  const route = { model: 'm', effort: 'low', reason: '', goal: '', scope: [], allowTests: false, readOnly: false, question: null, estimatedMinutes: 1, optimisticMinutes: 1, pessimisticMinutes: 1, workerMinutes: 2, verifyMinutes: 1 }
+  assert.equal(validate(route, SCHEMAS.route), route)
+  for (const key of ['workerMinutes', 'verifyMinutes']) {
+    assert.equal(SCHEMAS.route.properties[key].minimum, 1)
+    for (const value of [0, -1, 1.5]) assert.throws(() => validate({ ...route, [key]: value }, SCHEMAS.route), /at least|integer/)
+  }
 })
 
 test('a codex run leaves both lines in info/exclude', async () => {

@@ -1,13 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Row } from './types'
+import type { Background, Row } from './types'
 import { roundSpan } from './remaining.mjs'
 import { formatContext } from './context.mjs'
-import { addRow, agentExpected, anyRunning, finishRow, isRedo, removeRow, runCount } from './rows.mjs'
+import { addBackground, addRow, agentExpected, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount } from './rows.mjs'
 import { GUARD_DEFAULT, mergeConfig, parseThreshold, pluginLayer, projectPins, projectSkills, setGuard, userConfigPath } from '../config-layers.mjs'
 
 const rows = atom({ plugin: 'model-ladder', key: 'rows' } as const, [])
+// In-flight background tasks of this session (Bash background calls, async Workflow launches), shown while nothing else is.
+const background = atom({ plugin: 'model-ladder', key: 'background' } as const, [] as Background[])
 const isFolded = atom({ plugin: 'model-ladder', key: 'isFolded' } as const, false)
 const areSkillsFolded = atom({ plugin: 'model-ladder', key: 'areSkillsFolded' } as const, true)
 // Latest context window usage from session.measure as shown text ("ctx 35k/1M"); empty when unknown.
@@ -116,7 +118,7 @@ async function repoRootOf($: EngineInterface) {
   return root
 }
 
-// Every Claude Code run lock in this repo, newest first. The newest one is the main session's while no ladder agent runs.
+// Every Claude Code run lock in this repo, newest first, for each agent's expected duration.
 async function claudeLocks($: EngineInterface): Promise<Lock[]> {
   const dir = `${await repoRootOf($)}/.model-ladder/runs`
   const entries = await $.fs.list(dir).catch(() => [])
@@ -143,6 +145,15 @@ const ladderLock = (locks: Lock[], task: string | undefined) => {
 const agentExpectedMs = (locks: Lock[], tasks: Map<string, string>, r: Row) =>
   agentExpected(ladderLock(locks, tasks.get(r.run))?.phaseExpected, r.phase, r.model, r.effort)
 
+// Records one background launch from its tool result; the band only watches, so a failure here is swallowed.
+const track = async ($: EngineInterface, kind: Background['kind'], id: unknown, label: unknown) => {
+  try {
+    if (typeof id !== 'string' || !id) return
+    const task: Background = { id, kind, label: String(label ?? '').trim().split('\n')[0].trim(), startedAt: await $.clock.now() }
+    await update($, background, (l) => addBackground(l, task))
+  } catch { /* bookkeeping only */ }
+}
+
 export const register: Register = (on, options) => {
   // Redraws once a second while an agent runs, so its elapsed time moves.
   let tick: Timer | null = null
@@ -160,8 +171,8 @@ export const register: Register = (on, options) => {
   const verified = new Set<string>()
   // Last context size written to .model-ladder/context.json, so it is rewritten only when it changes.
   let lastContext = ''
-  // Redraws once a second while the main-session row shows, so its elapsed time moves.
-  let mainTick: Timer | null = null
+  // Redraws once a second while background rows show, so their elapsed time moves.
+  let bgTick: Timer | null = null
 
   // Records the subscription usage where preflight and the verifier read it, so the usage guard needs no statusline.
   // It runs with the band hidden too: the guard depends on it, not on the drawing.
@@ -195,6 +206,30 @@ export const register: Register = (on, options) => {
   // A reload drops its pending removals, so finished rows left from before it go now.
   on('session.start', async ($, e, next) => {
     await update($, rows, (l) => l.filter((r) => r.status === 'running'))
+    await update($, background, () => [])
+    return next(e)
+  })
+
+  // A background launch is tracked from its tool result; the band only watches and never blocks or fails the call.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const ran = await next(e)
+    await track($, 'shell', ran.result?.backgroundTaskId, e.description || e.command)
+    return ran
+  })
+  on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
+    const ran = await next(e)
+    await track($, 'workflow', ran.result?.taskId, ran.result?.workflowName || e.description)
+    return ran
+  })
+
+  // A task-notification says which background tasks ended.
+  on('prompt.submit', async ($, e, next) => {
+    try {
+      if (e.origin?.kind === 'task-notification') {
+        const ids = [...e.text.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)].map((m) => m[1].trim())
+        if (ids.length) await update($, background, (l) => removeBackground(l, ids))
+      }
+    } catch { /* bookkeeping only */ }
     return next(e)
   })
 
@@ -273,7 +308,7 @@ export const register: Register = (on, options) => {
     const total = (ms: number | null | undefined) => (ms ? `/${span(ms)}` : '')
     // An agent row: this agent's own elapsed over this agent's own expected duration. A running row reads its
     // expectation from the lock now; a finished row keeps the one it finished with.
-    const elapsed = (r: Row) => `${r.status === 'done' ? '✓ ' : ''}${span(r.ms ?? now - r.startedAt)}${total(r.status === 'done' ? r.expectedMs : agentExpectedMs(locks, tasks, r))}`
+    const elapsed = (r: Row) => `${r.status === 'done' ? '✓ ' : ''}${span(r.ms ?? now - r.startedAt)}${total(r.status === 'done' ? r.expectedMs : liveExpected(now - r.startedAt, agentExpectedMs(locks, tasks, r)))}`
     const usage = (await $.session.usage()).rateLimits
       .filter((w) => WINDOW[w.kind])
       .map((w) => {
@@ -289,28 +324,13 @@ export const register: Register = (on, options) => {
     // With 2+ runs each row says which run it belongs to, by that run's task.
     const tag = (r: Row) => (runs > 1 ? `${fit(tasks.get(r.run) ?? '', 20).trim()} ` : '')
     const dot = last && <Text>{' ' + (last.role === 'verifier' ? '🔵' : last.redo ? '🔴' : '🟢')}</Text>
-    // Between ladder agents a run is still going while its lock exists: the main session holds it.
-    const main = running.length ? null : (locks[0] ?? null)
-    if (main) mainTick ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
-    else { mainTick?.cancel(); mainTick = null }
-    // The no-model row is the main session: the run's elapsed over the run's forecast total.
-    const mainElapsed = (m: Lock) => `${span(now - m.startedAt)}${total(m.expectedMs)}`
-    const mainTask = main ? `${main.phase}: ${main.task}` : ''
-    const idle = running.length || main ? '' : ' · idle'
-
-    if (folded) {
-      return (
-        <Box>
-          {fold}
-          {dot}
-          <Text bold> model-ladder </Text>
-          <Text dimColor>── {usageLine || 'usage unknown'}{last ? ' · ' : ''}</Text>
-          {last && runs > 1 && <Text dimColor>{runs} runs · </Text>}
-          {last && <Text>{last.cell} · {elapsed(last)} · {fit(last.task, 30).trim()}</Text>}
-          {main && <Text> · no model · {mainElapsed(main)} · {fit(mainTask, 30).trim()}</Text>}
-        </Box>
-      )
-    }
+    // Background rows: this session's in-flight background tasks, only while Claude is not working and no ladder agent runs.
+    const bg = backgroundRows(await read($, background), Boolean(e.props.isWorking), running.length > 0)
+    if (bg.length) bgTick ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
+    else { bgTick?.cancel(); bgTick = null }
+    const bgElapsed = (t: Background) => span(now - t.startedAt)
+    const bgTask = (t: Background) => `${t.kind}: ${t.label}`
+    const idle = running.length || bg.length ? '' : ' · idle'
 
     const project = await readJson($, await projectPath($))
     const repoRoot = (await $.session.repo())?.root
@@ -318,6 +338,31 @@ export const register: Register = (on, options) => {
       mergeConfig(BAND_DEFAULTS, { ...(await readJson($, await userPath($))), ...pluginLayer(options) }, project),
       repoRoot,
     )
+    const guard = config.usageGuard ?? {}
+    // Display only: a missing setting shows as the default (on, 90%) and is never written back.
+    const enabled = guard.enabled ?? GUARD_DEFAULT.enabled
+    const threshold = guard.threshold ?? GUARD_DEFAULT.threshold
+    // The usage line with each percentage bold and colored: plain under 50%, warning from 50% up to the guard
+    // threshold, error at or above it. The rest stays dim.
+    const level = (pct: number) => (pct >= threshold ? 'error' : pct >= 50 ? 'warning' : undefined)
+    const usageRun = (text: string) => text.split(/(\d+(?:\.\d+)?%)/).map((part, i) => i % 2
+      ? <Text key={`usage-${i}`} bold color={level(Number.parseFloat(part))}>{part}</Text>
+      : part && <Text key={`usage-${i}`} dimColor>{part}</Text>)
+
+    if (folded) {
+      return (
+        <Box>
+          {fold}
+          {dot}
+          <Text bold> model-ladder </Text>
+          {usageRun(`── ${usageLine || 'usage unknown'}${last ? ' · ' : ''}`)}
+          {last && runs > 1 && <Text dimColor>{runs} runs · </Text>}
+          {last && <Text>{last.cell} · {elapsed(last)} · {fit(last.task, 30).trim()}</Text>}
+          {bg.length > 0 && <Text> · background · {bgElapsed(bg[0])} · {fit(bgTask(bg[0]), 30).trim()}{bg.length > 1 ? ` +${bg.length - 1}` : ''}</Text>}
+        </Box>
+      )
+    }
+
     // Show configured instructions in effect here; this does not claim that any skill has run.
     const projectNameForDisplay = projectName(repoRoot, await $.session.cwd())
     const skill = (value: unknown) => typeof value === 'string' && value.trim() ? formatInstructions(projectNameForDisplay, value) : null
@@ -345,10 +390,6 @@ export const register: Register = (on, options) => {
         fallback()
       }
     }
-    const guard = config.usageGuard ?? {}
-    // Display only: a missing setting shows as the default (on, 90%) and is never written back.
-    const enabled = guard.enabled ?? GUARD_DEFAULT.enabled
-    const threshold = guard.threshold ?? GUARD_DEFAULT.threshold
     // The project file can still pin a guard field; the person's change is saved, and they are told it does not apply here.
     const pinNote = (field: string) => projectPins(project, field)
       ? $.ui.toast(`model-ladder: saved to your own settings, but .claude/model-ladder.json sets usageGuard.${field} for this project and wins`)
@@ -367,7 +408,7 @@ export const register: Register = (on, options) => {
     }
     // Fixed-width columns line up in any font, unlike padding with spaces.
     // Terminal cuts the task itself; elsewhere the full task goes to the row and truncate-end adds the ellipsis at the band's edge.
-    const timeCols = Math.max(12, ...shown.map((r) => elapsed(r).length + 1), main ? mainElapsed(main).length + 1 : 0)
+    const timeCols = Math.max(12, ...shown.map((r) => elapsed(r).length + 1), ...bg.map((t) => bgElapsed(t).length + 1))
     const taskCols = Math.max(10, (e.props.bodyColumns ?? 60) - 20 - timeCols - 2)
     const row = (key: string, model: string, time: string, task: string, dim = false) => (
       <Box key={key} flexWrap="nowrap">
@@ -382,19 +423,19 @@ export const register: Register = (on, options) => {
           {fold}
           {dot}
           <Text bold> model-ladder </Text>
-          <Text dimColor>── {usageLine || 'usage unknown'}{idle}</Text>
+          {usageRun(`── ${usageLine || 'usage unknown'}${idle}`)}
         </Box>
         {withs.length > 0 && (
           <Box flexWrap="nowrap">
             <Button key="skills-fold" plain dimColor label={skillsFolded ? '▸' : '▾'}
               onPress={() => update($, areSkillsFolded, (v) => !v)} />
-            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Box flexGrow={1} flexShrink={1} minWidth={0} marginLeft={1}>
               <Text dimColor wrap={skillsFolded ? 'truncate-end' : undefined}>{skillsFolded ? skillText.replace(/\s+/g, ' ') : skillText}</Text>
             </Box>
           </Box>
         )}
-        {(shown.length > 0 || main) && row('head', 'model/effort', 'time', 'task', true)}
-        {main && row('main-session', 'no model', mainElapsed(main), e.surface === 'terminal' ? clip(mainTask, taskCols) : mainTask)}
+        {(shown.length > 0 || bg.length > 0) && row('head', 'model/effort', 'time', 'task', true)}
+        {bg.map((t) => row(`background-${t.id}`, 'background', bgElapsed(t), e.surface === 'terminal' ? clip(bgTask(t), taskCols) : bgTask(t)))}
         {shown.map((r) => row(r.id, r.cell, elapsed(r), e.surface === 'terminal' ? clip(tag(r) + r.task, taskCols) : tag(r) + r.task))}
         <Box>
           <Button key="guard" plain label={`usage guard: ${enabled ? 'on' : 'off'}`}

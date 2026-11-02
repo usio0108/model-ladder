@@ -37,6 +37,8 @@ export function routeForecast(state, route, verify, rows, now = Date.now()) {
   const start = typeof chosen === 'string' ? { model: chosen.split('/')[0], effort: chosen.split('/')[1] } : chosen
   state.key = JSON.stringify({ runtime: state.runtime, ...state.config, start, verify, continuation: state.continuation ?? null, routerMinutes: route.estimatedMinutes, readOnly: route.readOnly === true, allowTests: route.allowTests === true })
   state.routerMinutes = route.estimatedMinutes
+  // The router's wall-clock minutes for one worker attempt and one verification: the band's expectation until history has samples.
+  for (const key of ['workerMinutes', 'verifyMinutes']) if (Number.isInteger(route[key]) && route[key] > 0) state[key] = route[key]
   state.original = { ...durationForecast(state.key, route, rows, now), issuedAt: now }
   if (state.continuation && !state.original.sampleCount) state.original = { optimistic: null, mostLikely: null, pessimistic: null, unit: 'ms', sampleCount: 0, issuedAt: now, provenance: 'insufficient-data', reason: 'No comparable completed continuation; the earlier full-run forecast is retained in previousOriginal' }
 }
@@ -86,12 +88,22 @@ export function agentExpectations(rows, runtime, now = Date.now()) {
   }
 }
 
+// The router's per-phase minutes (the plan's workerMinutes and verifyMinutes, kept on the forecast state) fill in a
+// phase the history has no sample for. History wins: its phase+model+effort cells and its phase medians are kept as they are.
+export function withRouterMinutes(table, { workerMinutes, verifyMinutes } = {}) {
+  const phases = { ...table.phases }
+  for (const [phase, minutes] of [['worker', workerMinutes], ['verify', verifyMinutes]]) {
+    if (!Number.isFinite(phases[phase]) && Number.isInteger(minutes) && minutes > 0) phases[phase] = minutes * 60000
+  }
+  return { ...table, phases }
+}
+
 // The band's run lock carries the run's forecast total (the no-model row) and each agent's expected duration, so
 // the band reads both live as the run goes. It is written at every boundary start too: the router spawns inside the
 // first call, before any forecast total exists.
 function lockExpected(root, runId, forecast, now) {
   const expectedMs = forecast.original?.mostLikely
-  const phaseExpected = agentExpectations(history(root), forecast.runtime, now)
+  const phaseExpected = withRouterMinutes(agentExpectations(history(root), forecast.runtime, now), forecast)
   withMutex(root, 'registry', () => {
     let lock
     try { lock = JSON.parse(readFileSync(lockPath(root, runId), 'utf8')) } catch { return }

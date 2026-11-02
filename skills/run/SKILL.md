@@ -33,7 +33,7 @@ Other model-ladder runs (Claude Code or Codex) may be active in the same reposit
 
 ### Phase (from READY until finish)
 
-The band shows this session's phase while no ladder agent runs. Once you have a `runId`, record it in the run's lock:
+The phases are recorded in the run's lock. Once you have a `runId`, record it in the run's lock:
 
 ```sh
 node "${CLAUDE_PLUGIN_ROOT}/scripts/phase.mjs" <runId> needs-input

@@ -52,8 +52,8 @@ const plan = {
 }
 const runWith = (steps, extra = {}) => call(steps, { plan, ...extra })
 const done = { status: 'done', worktreePath: '/wt', filesChanged: ['a.py'], summary: 's', selfCheck: '', blockedReason: null }
-const pass = { pass: true, reason: 'ok', output: '' }
-const fail = { pass: false, reason: 'tests fail', output: 'E assert' }
+const pass = { pass: true, reason: 'ok', output: '', workerFiles: ['a.py'] }
+const fail = { pass: false, reason: 'tests fail', output: 'E assert', workerFiles: ['a.py'] }
 const diag = (action, model, effort) => ({ action, model, effort, reason: 'r', hint: 'h' })
 
 test('passes on the first attempt', async () => {
@@ -89,6 +89,7 @@ test('follows a legal router choice and carries the hint forward', async () => {
   assert.equal(calls[3].model, 'sonnet')
   assert.equal(calls[3].effort, 'medium')
   assert.match(calls[3].prompt, /HINT\n {2}h/)
+  assert.match(calls[3].prompt, /EDITING RULES[\s\S]*Edit\/Write tools[\s\S]*`uv run`[\s\S]*\.venv, uv\.lock[\s\S]*git status --porcelain --untracked-files=all[\s\S]*REPORT/)
   assert.match(calls[3].prompt, /#1 haiku\/low: tests fail -> raise_model/)
   assert.deepEqual(out.attempts.map((a) => a.action), ['raise_model', null])
 })
@@ -299,12 +300,19 @@ const splitStatus = async (r, extra) => (await routeOnly(r, extra)).out
 
 test('router estimates all phases and an honest range without a split schema or prompt', async () => {
   const { calls } = await routeOnly(long)
-  for (const key of ['estimatedMinutes', 'optimisticMinutes', 'pessimisticMinutes']) {
+  for (const key of ['estimatedMinutes', 'optimisticMinutes', 'pessimisticMinutes', 'workerMinutes', 'verifyMinutes']) {
     assert.equal(calls[0].schema.properties[key].type, 'integer')
     assert.ok(calls[0].schema.required.includes(key))
   }
   assert.equal(calls[0].schema.properties.split, undefined)
   assert.match(calls[0].prompt, /FULL run.*routing.*self-checks.*independent verification.*retry risk/)
+  assert.match(calls[0].prompt, /workerMinutes and verifyMinutes: positive integer wall-clock minutes for ONE worker attempt.*ONE independent verification/)
+})
+
+test('the plan carries the router\'s worker and verify minutes', async () => {
+  const { out } = await routeOnly({ ...long, workerMinutes: 12, verifyMinutes: 3 }, { runId: 'claude-test' })
+  assert.equal(out.plan.workerMinutes, 12)
+  assert.equal(out.plan.verifyMinutes, 3)
 })
 
 test('long tasks proceed and still require clarification or acceptance when needed', async () => {
@@ -359,14 +367,14 @@ const live = (enabled, usage, threshold = 90) => JSON.stringify({ enabled, thres
 test('without a usage command the verifier prompt and schema are unchanged', async () => {
   const { calls } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }])
   assert.doesNotMatch(calls[1].prompt, /usage/)
-  assert.deepEqual(calls[1].schema.required, ['pass', 'reason', 'output'])
+  assert.deepEqual(calls[1].schema.required, ['pass', 'reason', 'output', 'workerFiles'])
   assert.equal('usage' in calls[1].schema.properties, false)
 })
 
 test('the verifier runs the usage command last and must report its output', async () => {
   const { calls } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: { ...pass, usage: live(true, 10) } }], { usageGuard })
   assert.ok(calls[1].prompt.trimEnd().endsWith(`run \`${usageGuard.command}\` and put its output unchanged in the usage field.`))
-  assert.deepEqual(calls[1].schema.required, ['pass', 'reason', 'output', 'usage'])
+  assert.deepEqual(calls[1].schema.required, ['pass', 'reason', 'output', 'workerFiles', 'usage'])
   assert.deepEqual(calls[1].schema.properties.usage, { type: 'string' })
 })
 
@@ -655,4 +663,30 @@ test('both skills ask about usage risk first and rerun only on an explicit yes, 
   const codex = readFileSync(new URL('../../codex-skills/model-ladder/SKILL.md', import.meta.url), 'utf8')
   assert.match(codex, /USAGE_RISK.*ask continue \/ stop.*acceptUsageRisk true.*On stop, end and report/)
   for (const text of [claude, codex]) assert.match(text, /usageGuard, (Claude's usage limit \(`USAGE_LIMIT`\)|USAGE_LIMIT stops) and independent verification still apply/)
+})
+
+test('a passing verdict with empty workerFiles fails as an empty worktree and escalates', async () => {
+  const { out, calls } = await runWith([
+    { label: 'worker', result: done }, { label: 'verify', result: { ...pass, workerFiles: [], output: 'ran' } },
+    { label: 'diagnose', result: diag('raise_model', 'sonnet', 'medium') },
+    { label: 'worker', result: done }, { label: 'verify', result: pass },
+  ])
+  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.attempts.length, 2)
+  assert.equal(out.attempts[0].reason, 'worker changed nothing (verifier saw no unstaged or untracked changes)')
+  assert.equal(out.attempts[0].action, 'raise_model')
+  assert.equal(calls[3].model, 'sonnet')
+})
+
+test('a passing verdict with workerFiles verifies', async () => {
+  const { out } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: { ...pass, workerFiles: ['a.py', 'new.py'] } }])
+  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.attempts.length, 1)
+})
+
+test('the verify prompt with a verify command requires ACCEPTANCE and explains workerFiles', async () => {
+  const { calls } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }])
+  assert.match(calls[1].prompt, /succeeds AND the worker's changes .* meet every ACCEPTANCE item/)
+  assert.match(calls[1].prompt, /Fill workerFiles/)
+  assert.ok(calls[1].schema.required.includes('workerFiles'))
 })

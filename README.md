@@ -24,7 +24,7 @@ model-ladder is a [Claude Code](https://code.claude.com) and Codex plugin. The R
 - **Isolated Git worktrees**: each attempt runs in its own worktree.
 - **Escalation when appropriate**: verification failure may lead to a stronger model or higher effort.
 - **DIRECT for small tasks**: when actual session context reaches the configured threshold, the session handles small tasks and still submits them for independent verification.
-- **Forecasts**: each agent row's time column shows that agent's own elapsed time over its own expected duration (for example `5s/12m`, from earlier successful runs; elapsed only without history), and when the startup forecast says a subscription window is insufficient or at risk, the ladder asks once before any worker starts; long tasks run without split confirmation.
+- **Forecasts**: each agent row's time column shows that agent's own elapsed time over its own expected duration (for example `5s/12m`; once a running agent overruns it, the expected duration is recalibrated in steps, and a finished row keeps its original value) on worker, test-writer and verifier rows, from earlier successful runs or, before any history, the router's per-attempt minutes; router, diagnose and final-diagnosis rows show elapsed only, and when the startup forecast says a subscription window is insufficient or at risk, the ladder asks once before any worker starts; long tasks run without split confirmation.
 - **Concurrent runs**: runs with separate file scopes can proceed together, with overlap checks and serialized application of results.
 - **Automatic routing and layered settings**: session hooks enable the ladder by default, with personal settings and project overrides.
 - **Protected tests**: workers cannot modify tests unless the task explicitly asks for test changes.
@@ -117,7 +117,7 @@ haiku-5.5/low       5s       Summarize the README install steps
 | Usage | Each window shows time to reset, window length, and usage percentage. |
 | Context | `ctx 287k/1M (28.7%)` shows tokens used, window size, and percentage; unknown tokens show only the window. |
 | Status | 🟢 worker or router, 🔵 verifier, 🔴 retrying worker, and `✓` for a finished row. |
-| Task rows | Show the model, effort, the agent's elapsed time over its own expected duration (elapsed only without history), and task. The `no model` row shows run elapsed over the run's forecast total. |
+| Task rows | Show the model, effort, the agent's elapsed time (worker, test-writer and verifier rows add "/" and their own expected duration, from history or the router's minutes; other rows show elapsed only), and task. A `background` row (elapsed time, task `<kind>: <label>`) appears for each in-flight Bash background task or async Workflow launch of this session, only while Claude is not running a turn and no ladder agent runs. |
 | `▴` / `▾` | Collapse or expand the band. |
 | Instruction arrow | Show only applicable instructions without the `skill instructions:` prefix; expand the single-line preview with `▸` and collapse with `▾`. |
 | `usage guard` | Toggle usage protection. |

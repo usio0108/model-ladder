@@ -2,7 +2,7 @@ import '../helpers/isolate-home.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { durationForecast, remainingForecast, consumptionEvidence, assessUsage, calibrationError } from '../../scripts/ladder-rules.mjs'
-import { routeForecast } from '../../scripts/forecast.mjs'
+import { routeForecast, withRouterMinutes } from '../../scripts/forecast.mjs'
 
 const now = 10000000
 const route = { estimatedMinutes: 10, optimisticMinutes: 5, pessimisticMinutes: 30 }
@@ -129,4 +129,23 @@ test('continuations preserve the earlier original and never reuse a full-run est
   const full = { runtime: 'codex', config: {} }
   routeForecast(full, { ...route, model: 'cheap', effort: 'low' }, 'test', [], now)
   assert.notEqual(full.key, state.key)
+})
+
+test('router minutes per phase reach the state, and fill only the phases history has no sample for', () => {
+  const state = { runtime: 'claude', config: {} }
+  routeForecast(state, { ...route, workerMinutes: 12, verifyMinutes: 3, start: { model: 'cheap', effort: 'low' } }, 'test', [], now)
+  assert.deepEqual([state.workerMinutes, state.verifyMinutes], [12, 3])
+  // Only positive integers count.
+  for (const bad of [0, -2, 1.5, NaN, '5', null, undefined]) {
+    const s = { runtime: 'claude', config: {} }
+    routeForecast(s, { ...route, workerMinutes: bad, verifyMinutes: bad, start: { model: 'cheap', effort: 'low' } }, 'test', [], now)
+    assert.deepEqual([s.workerMinutes, s.verifyMinutes], [undefined, undefined])
+  }
+  const minutes = { workerMinutes: 12, verifyMinutes: 3 }
+  assert.deepEqual(withRouterMinutes({ cells: {}, phases: {} }, minutes), { cells: {}, phases: { worker: 720000, verify: 180000 } })
+  // History wins per phase; cells are never touched.
+  const history = { cells: { 'worker/haiku/low': 1000 }, phases: { worker: 5000 } }
+  assert.deepEqual(withRouterMinutes(history, minutes), { cells: { 'worker/haiku/low': 1000 }, phases: { worker: 5000, verify: 180000 } })
+  assert.deepEqual(withRouterMinutes(history, {}), history)
+  assert.deepEqual(withRouterMinutes(history), history)
 })

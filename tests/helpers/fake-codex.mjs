@@ -14,6 +14,7 @@ assert.equal(process.env.MODEL_LADDER_AUTORUN, '0')
 const schema = JSON.parse(readFileSync(arg('--output-schema'), 'utf8'))
 assert.equal(schema.additionalProperties, false)
 assert.deepEqual(schema.required, Object.keys(schema.properties))
+if (phase === 'route') assert.ok(['workerMinutes', 'verifyMinutes'].every((key) => schema.required.includes(key) && schema.properties[key].minimum === 1))
 assert.ok(!args.includes('--ephemeral'))
 assert.ok(args.includes('--json'))
 assert.equal(args.at(-1), '-')
@@ -35,7 +36,7 @@ if (scenario.environment === phase && scenario.limitEvent) {
 if (scenario.environment === phase) { console.error(scenario.environmentMessage ?? 'model unsupported or sandbox permission denied'); process.exit(1) }
 if (scenario.warning) console.error('sandbox initialized normally')
 let output
-if (phase === 'route') output = {model:scenario.invalidStart ? 'no-model' : 'cheap',effort:'low',reason:'small task',goal:'Fix greeting',scope:['greeting.mjs'],allowTests:scenario.allowTests ?? false,readOnly:scenario.readOnly ?? false,question:scenario.question ?? null,estimatedMinutes:scenario.estimatedMinutes ?? 5,optimisticMinutes:scenario.optimisticMinutes ?? scenario.estimatedMinutes ?? 5,pessimisticMinutes:scenario.pessimisticMinutes ?? scenario.estimatedMinutes ?? 5}
+if (phase === 'route') output = {model:scenario.invalidStart ? 'no-model' : 'cheap',effort:'low',reason:'small task',goal:'Fix greeting',scope:['greeting.mjs'],allowTests:scenario.allowTests ?? false,readOnly:scenario.readOnly ?? false,question:scenario.question ?? null,estimatedMinutes:scenario.estimatedMinutes ?? 5,optimisticMinutes:scenario.optimisticMinutes ?? scenario.estimatedMinutes ?? 5,pessimisticMinutes:scenario.pessimisticMinutes ?? scenario.estimatedMinutes ?? 5,workerMinutes:scenario.workerMinutes ?? 2,verifyMinutes:scenario.verifyMinutes ?? 1}
 if (phase === 'worker') {
   for (const [file, value] of Object.entries(scenario.expectWorkerFiles ?? {})) {
     if (number > 1) assert.equal(readFileSync(join(cwd, file), 'utf8'), value)

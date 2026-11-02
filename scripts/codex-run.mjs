@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { TEST_PATTERNS } from '../hooks/guard.mjs'
 import { legalMoves, pickMove, isCell, isDirect, usageRisk } from './ladder-rules.mjs'
 import { agentExpected } from '../hooks/band/rows.mjs'
-import { agentExpectations, history, startForecast, routeForecast, updateForecast, finishForecast } from './forecast.mjs'
+import { agentExpectations, history, startForecast, routeForecast, updateForecast, finishForecast, withRouterMinutes } from './forecast.mjs'
 import { readCodexUsage } from './codex-usage.mjs'
 import { atomicJson, renderLive } from './codex-live.mjs'
 import { writeHandoff } from './codex-handoff.mjs'
@@ -237,8 +237,10 @@ export async function runLadder(input, options = {}) {
       const skills = phase === 'worker' ? config.worker_skills : phase === 'verify' ? config.verifier_skills : ''
       if (skills.trim() && !skills.includes('${')) prompt += `\n\nSKILL INSTRUCTIONS\n${skills}\n\nInterpret these natural-language instructions in the context of your assigned task and role. Evaluate each condition first, then select only the applicable relevant skills, plugins, slash commands, MCP tools or other capabilities actually available in this session. Existing name lists are requests to use those capabilities where relevant. A name may be a skill, a plugin name or an MCP server name (tools named mcp__<server>__*); map it to the matching available capability. Locate and read selected skills' SKILL.md files using the supplied skill paths and follow them, and call plugin, slash-command and MCP tools directly, within this role's scope, permissions, protected paths and verification rules. Verifiers only check and report; they never fix code. If an applicable required capability cannot be found, report it explicitly as a blocker and list the available capabilities you checked; never invent names or claim to have used a capability you did not use. Never invoke model-ladder skills, workflows or runners recursively.`
       prompt += '\nNever spawn other agents or delegate this role. Never stage files or push.'
+      if (phase === 'worker') prompt += '\nEDITING RULES: edit files with apply_patch, never through an interpreter one-off (python/node -e/sed scripts) whose failure can be silent. If Python is genuinely needed, run it with `uv run` (ephemeral); if the project did not already use Python, delete everything that run created (.venv, uv.lock, __pycache__, scratch scripts) before reporting. Before reporting done, run `git status --porcelain --untracked-files=all` in the worktree and confirm every file you claim in filesChanged shows a worker change (second column not a space, or ??).'
       if (phase === 'worker') prompt += `\nRun the provided VERIFY command yourself when available${verifySkill ? `, or follow the existing project verification skill at ${verifySkill}` : ''}. Report the actual self-check commands and results in summary; do not invent a passing check or acceptance criteria. Verification by another role remains required.`
       if (phase === 'route' && directContext) prompt += '\nAlso return small (boolean) and smallReason. small is true only for a trivial, bounded task the calling session can implement safely. Context size is supplied by the caller; do not infer or invent it.'
+      if (phase === 'route') prompt += '\nReturn workerMinutes and verifyMinutes as positive integer wall-clock minutes for ONE worker attempt (implementation and self-checks) and ONE independent verification.'
       if (phase === 'worker' && route.allowTests) prompt += '\nTEST-WRITER ROLE: the user requested test changes. Tests must check real behavior; never weaken existing tests. Change code under test only if the task requests it. Explicit protected paths and verification inputs remain forbidden.'
       checkUsage()
       return role(phase, cell, input.task, async () => {
@@ -259,6 +261,8 @@ Also return estimatedMinutes (most likely), optimisticMinutes and pessimisticMin
       return result
     }
     routeForecast(forecast, { ...route, start: cell }, verify ?? verifySkill, past)
+    live.expected = withRouterMinutes(live.expected, route)
+    publish()
     observe('routed')
     if (!route.readOnly && !verify && !verifySkill && !acceptance.length) return Object.assign(result, { status: 'NEEDS_INPUT', message: 'No existing verification command was found. Supply explicit acceptance criteria in acceptance, or configure verify in .codex/model-ladder.json.' })
     // usageGuard first: a spent quota stops the run, it is not a question.

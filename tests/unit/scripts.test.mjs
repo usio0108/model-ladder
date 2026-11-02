@@ -7,6 +7,7 @@ import { basename, dirname, join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { artifactDir } from '../../scripts/common.mjs'
+import { PHASES } from '../../scripts/phase.mjs'
 
 const script = (name) => fileURLToPath(new URL(`../../scripts/${name}.mjs`, import.meta.url))
 const dirs = []
@@ -439,6 +440,8 @@ test('the lock carries the task and phase: preflight, then claimed, then what ph
   }
   assert.ok(!existsSync(join(dir, 'sub', '.model-ladder')))
 
+  assert.ok(!PHASES.includes('direct'))
+  assert.equal(phase(dir, runId, 'direct').status, 'ERROR')
   assert.equal(phase(dir, runId, 'bogus').status, 'ERROR')
   assert.equal(lockOf(dir, runId).phase, 'awaiting-finish')
   assert.equal(phase(dir, 'claude-missing', 'needs-input').status, 'ERROR')

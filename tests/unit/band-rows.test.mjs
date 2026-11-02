@@ -1,7 +1,7 @@
 import '../helpers/isolate-home.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { addRow, finishRow, removeRow, anyRunning, runCount, isRedo } from '../../hooks/band/rows.mjs'
+import { addRow, finishRow, removeRow, anyRunning, runCount, isRedo, agentExpected, addBackground, removeBackground, backgroundRows, liveExpected } from '../../hooks/band/rows.mjs'
 
 const row = (id, run) => ({ id, run, role: 'worker', redo: false, cell: 'x', task: 't', status: 'running', ms: null, startedAt: 0 })
 
@@ -30,4 +30,67 @@ test('redo only looks at the same run verifier', () => {
   assert.equal(isRedo(verified, 'A', true), true)
   assert.equal(isRedo(verified, 'B', true), false)
   assert.equal(isRedo(verified, 'A', false), false)
+})
+
+test('only worker, test-writer and verify agents have an expected duration', () => {
+  const table = { cells: { 'worker/haiku/low': 720000 }, phases: { worker: 300000, 'test-writer': 240000, verify: 120000, route: 60000, diagnose: 60000, final: 60000 } }
+  assert.equal(agentExpected(table, 'worker', 'haiku', 'low'), 720000)
+  assert.equal(agentExpected(table, 'worker', 'opus', 'high'), 300000)
+  assert.equal(agentExpected(table, 'test-writer', 'haiku', 'low'), 240000)
+  assert.equal(agentExpected(table, 'verify', 'sonnet', 'low'), 120000)
+  for (const phase of ['route', 'diagnose', 'final', 'final diagnosis', 'bogus']) assert.equal(agentExpected(table, phase, 'haiku', 'low'), null)
+  // A phase+model+effort entry of a phase that shows no expectation is ignored too.
+  assert.equal(agentExpected({ cells: { 'route/haiku/low': 600000 }, phases: {} }, 'route', 'haiku', 'low'), null)
+})
+
+test('liveExpected keeps the expected duration until the agent overruns it, then grows it in steps', () => {
+  const m = 60000
+  // Below the expectation: unchanged.
+  assert.equal(liveExpected(0, 7 * m), 7 * m)
+  assert.equal(liveExpected(7 * m - 1, 7 * m), 7 * m)
+  // At the expectation: the first step (max(1m, 3.5m) = 3.5m).
+  assert.equal(liveExpected(7 * m, 7 * m), 10.5 * m)
+  // Over it: 7m expected shows 14m at 12m elapsed, 17.5m at 14m elapsed.
+  assert.equal(liveExpected(12 * m, 7 * m), 14 * m)
+  assert.equal(liveExpected(14 * m - 1, 7 * m), 14 * m)
+  assert.equal(liveExpected(14 * m, 7 * m), 17.5 * m)
+  // Several steps over: the smallest step count that lands above elapsed.
+  assert.equal(liveExpected(30 * m, 7 * m), 31.5 * m)
+  for (let elapsed = 7 * m; elapsed < 60 * m; elapsed += 1000) {
+    const shown = liveExpected(elapsed, 7 * m)
+    assert.ok(shown > elapsed)
+    assert.ok(shown - elapsed <= 3.5 * m)
+  }
+  // A small expectation uses the 1-minute minimum step, not half of it.
+  assert.equal(liveExpected(30000, 60000), 60000)
+  assert.equal(liveExpected(60000, 60000), 2 * m)
+  assert.equal(liveExpected(100000, 60000), 2 * m)
+  assert.equal(liveExpected(2 * m, 60000), 3 * m)
+  assert.equal(liveExpected(5 * m, 2 * m), 6 * m)
+  // No usable expectation: null.
+  for (const bad of [null, undefined, NaN, 0, -5, Infinity, 'x']) assert.equal(liveExpected(12 * m, bad), null)
+})
+
+test('addBackground appends a task and ignores a duplicate id', () => {
+  const a = { id: 'b1', kind: 'shell', label: 'npm test', startedAt: 1 }
+  const b = { id: 'w1', kind: 'workflow', label: 'ladder', startedAt: 2 }
+  assert.deepEqual(addBackground([], a), [a])
+  assert.deepEqual(addBackground([a], b), [a, b])
+  assert.deepEqual(addBackground([a], { ...a, label: 'other' }), [a])
+})
+
+test('removeBackground drops the listed ids only', () => {
+  const list = [{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }]
+  assert.deepEqual(removeBackground(list, ['b1', 'b3']), [{ id: 'b2' }])
+  assert.deepEqual(removeBackground(list, ['nope']), list)
+  assert.deepEqual(removeBackground(list, []), list)
+})
+
+test('backgroundRows show only while Claude is not working and no agent runs', () => {
+  const list = [{ id: 'b1', kind: 'shell', label: 'x', startedAt: 1 }]
+  assert.deepEqual(backgroundRows(list, false, false), list)
+  assert.deepEqual(backgroundRows(list, true, false), [])
+  assert.deepEqual(backgroundRows(list, false, true), [])
+  assert.deepEqual(backgroundRows(list, true, true), [])
+  assert.deepEqual(backgroundRows([], false, false), [])
 })

@@ -8,7 +8,7 @@ const nullable = { type: ['string', 'null'] }
 const strings = { type: 'array', items: string }
 const object = (properties) => ({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false })
 export const SCHEMAS = {
-  route: object({ model: string, effort: string, reason: string, goal: string, scope: strings, allowTests: { type: 'boolean' }, readOnly: { type: 'boolean' }, question: nullable, estimatedMinutes: { type: 'integer' }, optimisticMinutes: { type: 'integer' }, pessimisticMinutes: { type: 'integer' } }),
+  route: object({ model: string, effort: string, reason: string, goal: string, scope: strings, allowTests: { type: 'boolean' }, readOnly: { type: 'boolean' }, question: nullable, estimatedMinutes: { type: 'integer' }, optimisticMinutes: { type: 'integer' }, pessimisticMinutes: { type: 'integer' }, workerMinutes: { type: 'integer', minimum: 1 }, verifyMinutes: { type: 'integer', minimum: 1 } }),
   worker: object({ status: { enum: ['done', 'blocked'] }, summary: string, blockedReason: nullable }),
   verify: object({ pass: { type: 'boolean' }, reason: string, output: string }),
   diagnose: object({ action: { enum: ['raise_effort', 'raise_model', 'stop_environment', 'stop_unclear'] }, model: nullable, effort: nullable, reason: string, hint: string }),
@@ -28,6 +28,7 @@ export function validate(value, schema, path = 'output') {
     }
   }
   if (schema.type === 'array') value.forEach((item, i) => validate(item, schema.items, `${path}[${i}]`))
+  if (schema.minimum !== undefined && value < schema.minimum) throw new Error(`${path}: expected at least ${schema.minimum}`)
   return value
 }
 
