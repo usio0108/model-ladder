@@ -217,13 +217,17 @@ export const register: Register = (on, options) => {
   })
 
   // A background launch is tracked from its tool result; the band only watches and never blocks or fails the call.
+  // A subagent's call (e.agentId set) gets no row: its task-notification goes to the subagent, never to this session.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
+    if (e.agentId) return ran
     await track($, 'shell', ran.result?.backgroundTaskId, e.description || e.command, e.command)
     return ran
   })
   on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
     const ran = await next(e)
+    // The ladder's own launch gets no row: the person already knows model-ladder is choosing a model.
+    if (e.agentId || e.workflow === 'ladder' || ran.result?.workflowName === 'ladder') return ran
     await track($, 'workflow', ran.result?.taskId, ran.result?.workflowName || e.description)
     return ran
   })

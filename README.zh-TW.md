@@ -111,7 +111,7 @@ haiku-5.5/low       5s         Summarize the README install steps
 | 使用量 | 各額度視窗顯示重設倒數、視窗長度與使用百分比。 |
 | Context | `ctx 287k/1M (28.7%)` 顯示已用 token、視窗上限與百分比，token 未知時只顯示上限。 |
 | 狀態 | 🟢 worker 或 router、🔵 verifier、🔴 重試中的 worker，任務列的 `✓` 表示已結束。 |
-| 任務列 | 顯示模型、effort、耗時（worker、test-writer、verifier 列另外顯示「/」與自己的預期時長，來自歷史或 router 給的分鐘數；其他列只顯示耗時）與任務；本 session 每個進行中的 Bash 背景工作或非同步 Workflow 啟動各有一列 `background`（耗時與任務 `<kind>: <label>`），只在 Claude 沒有執行回合且沒有 ladder agent 執行時出現。 |
+| 任務列 | 顯示模型、effort、耗時（worker、test-writer、verifier 列另外顯示「/」與自己的預期時長，來自歷史或 router 給的分鐘數；其他列只顯示耗時）與任務；本 session 主迴圈發出的每個進行中 Bash 背景工作或非同步 Workflow 啟動（不含 ladder 自己的 Workflow 與 subagent 發出的呼叫）各有一列 `background`（耗時與任務 `<kind>: <label>`），只在 Claude 沒有執行回合且沒有 ladder agent 執行時出現。 |
 | `▴` / `▾` | 收合或展開 Band。 |
 | 指示箭頭 | 只顯示生效指示且不加 `skill instructions:` 前綴，預設收成一行，以 `▸` 展開、`▾` 收合。 |
 | `usage guard` | 開關使用量保護。 |

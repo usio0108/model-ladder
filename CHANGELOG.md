@@ -4,6 +4,13 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [1.1.4] - 2026-11-03
+
+- The Claude Code band no longer shows a `background` row for the ladder's own Workflow launch (`workflow: ladder`); you already know model-ladder is choosing a model. Other async Workflow launches still get a row.
+- A background Bash call or Workflow launch made inside a subagent (for example a verifier running a test command in the background) no longer adds a background row. Its task-notification goes to the subagent, never to the main session, so the row used to stay after the task ended.
+- When Claude Code refuses a worker's isolation worktree ("git could not be run to resolve it"), a transient failure, the worker or test-writer now retries once with the same model and effort instead of the run stopping with `stop_environment`.
+- Cleanup removes worktrees with `git worktree remove --force --force`, so the worktrees Claude Code locks no longer linger with their `worktree-wf_*` branches.
+
 ## [1.1.3] - 2026-11-02
 
 - Overrun estimates now use history: once an agent row passes its expected duration, the expected value becomes the median of at least 2 past runs that took longer (agentExpectations now also returns the raw samples), else the step estimate shown with a leading `~` (for example `12m/~14m`) in the Claude Code band and the Codex panel; and in the Claude Code band an overrun agent row shows its current tool activity (for example `Bash: Run unit tests`) in place of the task text, falling back to the task text when it cannot be read.

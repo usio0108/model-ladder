@@ -313,7 +313,7 @@ test('usage percentages are colored by level, not bold: plain under 50, yellow t
 })
 
 // Background rows: one per in-flight background task, only while Claude is not working and no ladder agent runs.
-const mountBackground = async ($: any, on: any) => {
+const mountBackground = async ($: any, on: any, workflowName = 'ladder') => {
   const clock = mock.clock(on, { now: 1_700_000_000_000 })
   mock.env(on, { HOME: '/home/test' })
   on('session.cwd', () => ({ value: '/repos/app' }))
@@ -321,7 +321,7 @@ const mountBackground = async ($: any, on: any) => {
   on('session.usage', () => ({ value: { rateLimits: [] } }))
   on('fs.exists', ($: any, e: any) => ({ value: slash(e.path) === '/repos/app/.git' }))
   on('tool.call', { tool: 'Bash' }, ($: any, e: any) => ({ result: e.run_in_background ? { backgroundTaskId: 'bg-1' } : { stdout: 'ok' } }))
-  on('tool.call', { tool: 'Workflow' }, () => ({ result: { status: 'async_launched', taskId: 'wf-1', workflowName: 'ladder' } }))
+  on('tool.call', { tool: 'Workflow' }, () => ({ result: { status: 'async_launched', taskId: 'wf-1', workflowName } }))
   on('prompt.submit', ($: any, e: any) => ({ text: e.text }))
   on('agent.spawn', ($: any, e: any) => ({ agentId: `${e.workflow?.runId}:${e.description}`, model: 'claude-haiku-5-5' }))
   return { clock, mount: (isWorking = false) => $.ui.mount({ ...BAND, surface: 'desktop', props: { ...BAND.props, isWorking } }) }
@@ -352,12 +352,48 @@ test('a Bash background call adds a row only while Claude is not working, and a 
   await ui.unmount()
 })
 
-test('an async Workflow launch adds a workflow row', async ($, on) => {
+test('a subagent background Bash call adds no row, since its task-notification never reaches this session', async ($, on) => {
+  const { mount } = await mountBackground($, on)
+  await $.tool.call({ tool: 'Bash', command: 'npm run verify', run_in_background: true, agentId: 'host-a:verifier' })
+  const ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /shell: npm run verify/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a main-session background Bash call still adds a row', async ($, on) => {
+  const { mount } = await mountBackground($, on)
+  await $.tool.call({ tool: 'Bash', command: 'npm run verify', run_in_background: true })
+  const ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'shell: npm run verify' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a non-ladder Workflow launch still adds a background row named after the workflow', async ($, on) => {
+  const { mount } = await mountBackground($, on, 'review')
+  await $.tool.call({ tool: 'Workflow', workflow: 'review' })
+  const ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'workflow: review' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a subagent Workflow launch adds no background row', async ($, on) => {
+  const { mount } = await mountBackground($, on, 'review')
+  await $.tool.call({ tool: 'Workflow', workflow: 'review', agentId: 'host-a:verifier' })
+  const ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'workflow: review' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a ladder Workflow launch adds no background row', async ($, on) => {
   const { mount } = await mountBackground($, on)
   await $.tool.call({ tool: 'Workflow', workflow: 'ladder' })
   const ui = await mount(false)
-  expect(await ui.find({ type: 'Text', text: 'background' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'workflow: ladder' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'workflow: ladder' })).toBeUndefined()
   await ui.unmount()
 })
 

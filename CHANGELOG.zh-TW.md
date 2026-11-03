@@ -4,6 +4,13 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [1.1.4] - 2026-11-03
+
+- Claude Code band 不再為 ladder 自己的 Workflow 啟動（`workflow: ladder`）顯示 `background` 列，使用者已經知道 model-ladder 正在選擇模型；其他非同步 Workflow 啟動仍會顯示。
+- 在 subagent 裡發出的背景 Bash 或 Workflow（例如 verifier 在背景跑測試指令）不再新增背景列。它的 task-notification 只會送給該 subagent，主 session 收不到，所以以前任務結束後該列會一直留著。
+- Claude Code 拒絕 worker 的隔離 worktree（"git could not be run to resolve it"，屬暫時性失敗）時，worker 或 test-writer 會用同一個 model 與 effort 重試一次，不再以 `stop_environment` 停掉整個 run。
+- 清理時改用 `git worktree remove --force --force`，Claude Code 鎖住的 worktree 與其 `worktree-wf_*` 分支不再殘留。
+
 ## [1.1.3] - 2026-11-02
 
 - 超時估計改用歷史資料：agent 列超過預期時長後，預期值改為至少 2 筆更長的過往紀錄的中位數（agentExpectations 現在也回傳原始樣本），否則顯示階梯式估計並在前面加 `~`（例如 `12m/~14m`），Claude Code band 與 Codex 面板皆適用；Claude Code band 中超時的 agent 列會以目前的工具活動（例如 `Bash: Run unit tests`）取代任務文字，讀不到時退回任務文字。

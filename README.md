@@ -117,7 +117,7 @@ haiku-5.5/low       5s         Summarize the README install steps
 | Usage | Each window shows time to reset, window length, and usage percentage. |
 | Context | `ctx 287k/1M (28.7%)` shows tokens used, window size, and percentage; unknown tokens show only the window. |
 | Status | 🟢 worker or router, 🔵 verifier, 🔴 retrying worker, and `✓` for a finished row. |
-| Task rows | Show the model, effort, the agent's elapsed time (worker, test-writer and verifier rows add "/" and their own expected duration, from history or the router's minutes; other rows show elapsed only), and task. A `background` row (elapsed time, task `<kind>: <label>`) appears for each in-flight Bash background task or async Workflow launch of this session, only while Claude is not running a turn and no ladder agent runs. |
+| Task rows | Show the model, effort, the agent's elapsed time (worker, test-writer and verifier rows add "/" and their own expected duration, from history or the router's minutes; other rows show elapsed only), and task. A `background` row (elapsed time, task `<kind>: <label>`) appears for each in-flight Bash background task or async Workflow launch the main session started (not the ladder's own Workflow, not a subagent's call), only while Claude is not running a turn and no ladder agent runs. |
 | `▴` / `▾` | Collapse or expand the band. |
 | Instruction arrow | Show only applicable instructions without the `skill instructions:` prefix; expand the single-line preview with `▸` and collapse with `▾`. |
 | `usage guard` | Toggle usage protection. |

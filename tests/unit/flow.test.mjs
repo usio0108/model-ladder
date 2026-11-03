@@ -690,3 +690,67 @@ test('the verify prompt with a verify command requires ACCEPTANCE and explains w
   assert.match(calls[1].prompt, /Fill workerFiles/)
   assert.ok(calls[1].schema.required.includes('workerFiles'))
 })
+
+const refused = 'Refusing to use C:\\repo\\.claude\\worktrees\\wf_1 as an isolation worktree: git could not be run to resolve it, so its git identity could not be verified. Isolation is refused rather than assumed — recreate the worktree (or remove the corrupt .git entry) and retry.'
+
+test('an isolation worktree refusal retries the worker once with the same model and effort, without diagnosis', async () => {
+  const { out, calls } = await runWith([
+    { label: 'worker', throws: refused },
+    { label: 'worker', result: done }, { label: 'verify', result: pass },
+  ])
+  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.attempts.length, 1)
+  assert.deepEqual(calls.map((c) => c.label.split(' ')[0]), ['worker', 'worker', 'verify'])
+  assert.equal(`${calls[1].model}/${calls[1].effort}`, 'haiku/low')
+  assert.equal(calls[1].isolation, 'worktree')
+  assert.equal(calls[1].agentType, 'model-ladder:worker')
+  assert.equal(calls[1].prompt, calls[0].prompt)
+  assert.equal(out.attempts[0].tokens, 30, 'both worker runs and the verifier count')
+  assert.equal(out.tokens, 30)
+})
+
+test('the refusal also retries a test-writer, and a refusal returned as text counts', async () => {
+  const { out, calls } = await runWith([
+    { label: 'worker', result: refused },
+    { label: 'worker', result: done }, { label: 'verify', result: pass },
+  ], { plan: { ...plan, allowTests: true } })
+  assert.equal(out.status, 'VERIFIED')
+  assert.deepEqual(calls.map((c) => c.agentType), ['model-ladder:test-writer', 'model-ladder:test-writer', 'model-ladder:verifier'])
+})
+
+test('a refusal that repeats gets only one retry, then the usual failure handling and escalation', async () => {
+  const { out, calls } = await runWith([
+    { label: 'worker', throws: refused },
+    { label: 'worker', throws: refused },
+    { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
+    { label: 'worker', result: done }, { label: 'verify', result: pass },
+  ])
+  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.attempts.length, 2)
+  assert.match(out.attempts[0].reason, /^worker failed: Refusing to use/)
+  assert.equal(out.attempts[0].action, 'raise_effort')
+  assert.equal(`${calls[3].model}/${calls[3].effort}`, 'haiku/medium')
+})
+
+test('other worker errors are not retried', async () => {
+  const { calls } = await runWith([
+    { label: 'worker', throws: 'Refusing to use the network' },
+    { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
+    { label: 'worker', result: done }, { label: 'verify', result: pass },
+  ])
+  assert.deepEqual(calls.map((c) => c.label.split(' ')[0]), ['worker', 'diagnose', 'worker', 'verify'])
+})
+
+test('telemetry: the isolation retry is its own boundary and replays without respending', async () => {
+  let journal = [], out
+  for (const step of [{ label: 'worker', throws: refused }, { label: 'worker', result: done }, { label: 'verify', result: pass }]) {
+    const r = await runWith([step], { telemetry: true, journal })
+    assert.equal(r.calls.length, 1, 'one agent per Workflow call')
+    out = r.out; journal = out.journal
+  }
+  assert.equal(out.status, 'VERIFIED')
+  assert.deepEqual(journal.map((e) => e.phase), ['worker', 'worker', 'verify'])
+  assert.deepEqual(journal.map((e) => `${e.model}/${e.effort}`), ['haiku/low', 'haiku/low', 'haiku/low'])
+  assert.equal(out.attempts.length, 1)
+  assert.equal(out.tokens, 30)
+})

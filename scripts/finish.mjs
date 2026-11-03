@@ -67,7 +67,8 @@ function cleanup(root, state, keep, known, runId, keepOrphans = false) {
     const orphan = !others.length && under(wt.path, join(root, '.claude', 'worktrees')) && !kept.some((p) => samePath(p, wt.path))
     if (!mine && !orphan) continue
     if (!mine && keepOrphans) { orphans.push(wt.path); continue }
-    tryGit(root, 'worktree', 'remove', '--force', wt.path)
+    // Claude Code locks the worktrees it creates; removing a locked one takes --force twice.
+    tryGit(root, 'worktree', 'remove', '--force', '--force', wt.path)
     if (wt.branch) tryGit(root, 'branch', '-D', wt.branch)
   }
   return orphans

@@ -184,6 +184,12 @@ function guardStop(raw) {
 // Another agent would fail the same way until the reset, so the run stops and hands off. Independent of usageGuard.
 const HARD_LIMIT = /hit your (?:session |weekly |daily |opus |usage |5-hour )?limit|usage limit|rate[ _-]?limit|limit reached|too many requests|out of (?:extra )?usage|\b429\b/i
 
+// Claude Code sometimes refuses a freshly created, healthy isolation worktree ("Refusing to use <path> as an
+// isolation worktree: git could not be run to resolve it ..."). The refusal is transient: a new worktree works.
+function isolationRefused(measurement) {
+  return !measurement.limit && /Refusing to use\s[\s\S]*\sas an isolation worktree/i.test(measurement.error ?? '')
+}
+
 function hardLimit(text) {
   const message = String(text ?? '').trim()
   if (!HARD_LIMIT.test(message)) return null
@@ -525,11 +531,20 @@ async function run(plan) {
 
   for (let n = 1; n <= config.maxAttempts; n++) {
     phase(`Attempt ${n}`)
-    const worker = await measured(brief(plan, history, hint), {
+    const runWorker = () => measured(brief(plan, history, hint), {
       label: `worker ${label(cell)}`, phase: `Attempt ${n}`, schema: WORKER_SCHEMA,
       agentType: workerType, ...(plan.readOnly ? {} : { isolation: 'worktree' }), ...cell,
     })
-    tokens += worker.tokens
+    let worker = await runWorker()
+    let workerTokens = worker.tokens
+    // A transient host refusal of a healthy worktree: one more try with the same cell, no diagnosis, no escalation.
+    // A separate measured() call, so the boundary and journal replay still allow one agent per Workflow call.
+    if (isolationRefused(worker)) {
+      log(`#${n} ${label(cell)}: isolation worktree refused; retrying once with the same model and effort`)
+      worker = await runWorker()
+      workerTokens += worker.tokens
+    }
+    tokens += workerTokens
     const work = worker.result
     let verdict
     let verifyTokens = 0
@@ -552,7 +567,7 @@ async function run(plan) {
       }
     }
     tokens += verifyTokens
-    const attempt = { cell, work, verdict, diagnosis: null, tokens: worker.tokens + verifyTokens }
+    const attempt = { cell, work, verdict, diagnosis: null, tokens: workerTokens + verifyTokens }
     history.push(attempt)
     log(`#${n} ${label(cell)}: ${verdict.pass ? 'PASS' : `FAIL (${verdict.reason})`}`)
 

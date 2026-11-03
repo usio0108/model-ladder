@@ -7,7 +7,7 @@
 耗時範圍以結構化資料存於 live/result/history JSON，面板時間欄顯示「經過/預估」。
 worker、test-writer、verifier 列顯示該 agent 自己的經過時間與自己的預期時長（router、diagnose、final diagnosis 列只顯示經過時間）：取自可比較成功 run（VERIFIED、已完成、未被截斷、90 天內、相同 runtime）的 `forecast.phases` 階段時長中位數，至少有兩筆樣本時依「階段加模型/effort」，之前只依階段；某階段沒有樣本時，改用 router 給的 `workerMinutes` 與 `verifyMinutes`（單次 worker 嘗試與單次驗證的正整數實際分鐘數，隨 plan 帶入，路由後寫入 run 鎖的 `phaseExpected`；Codex 則寫入 `live.expected`）；歷史樣本仍然優先。兩者都沒有時只顯示經過時間。
 Claude Code 即時讀取 run 鎖中的 `phaseExpected`（每個 workflow 邊界寫入），Codex 面板讀取 `live.json` 的 `expected`；已結束的列保留結束時的值。執行中的列經過時間達到或超過預期時長後，顯示的預期時長會分段重新估計：預期值加上最小的整數個步長（步長為 1 分鐘與預期值一半中較大者），使結果大於經過時間（預期 7m 的列在經過 12m 時顯示 14m，經過 14m 時顯示 17.5m，所以分母只在步長邊界變動）。已結束的列保留原本的預期時長，超時仍會顯示為 `✓ 12m/7m`。
-Claude Code band 另外為本 session 每個進行中的背景工作（帶 `run_in_background` 的 Bash 呼叫，或非同步 Workflow 啟動）各顯示一列 `background`：只顯示經過時間，任務欄為 `<kind>: <label>`（`shell` 或 `workflow`）。只在 Claude 沒有執行回合且沒有 ladder agent 執行時顯示，收到該工作的 task-notification 後移除。範圍包含路由、
+Claude Code band 另外為本 session 每個進行中的背景工作（主 session 自己發出、帶 `run_in_background` 的 Bash 呼叫，或 ladder 以外的非同步 Workflow 啟動；subagent 發出的不算）各顯示一列 `background`：只顯示經過時間，任務欄為 `<kind>: <label>`（`shell` 或 `workflow`）。只在 Claude 沒有執行回合且沒有 ladder agent 執行時顯示，收到該工作的 task-notification 後移除。範圍包含路由、
 實作、自我檢查、測試、獨立驗證與重試風險。無可比較成功歷史時，範圍僅為
 路由模型判斷；有資料後使用實際誤差比例的最小值、中位數與最大值，不宣稱
 信賴區間或準確率。歷史保留原始預估、階段更新、模型、effort、token、實際計時
