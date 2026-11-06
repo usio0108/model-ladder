@@ -37,7 +37,7 @@ Only `VERIFIED` exits with code 0; `DIRECT`, `DIRTY`, `NEEDS_INPUT`, and `STALE_
 Input also accepts JSON on stdin; on Windows, use a UTF-8 input file in the system temp directory.
 
 Reuse the panel across tasks; without a visible terminal, read runner progress in tool output.
-The HUD must launch Codex and cannot attach to an existing session.
+The HUD must launch Codex and cannot attach to an existing session. On Windows the Codex SessionStart hook sets this up by itself: it adds a marked `codex` function to your PowerShell profiles (PowerShell 7 and Windows PowerShell), so from the next new PowerShell window typing `codex` opens the HUD. Subcommands such as `exec` or `login`, redirected input or output, and a missing `node-pty` or Node.js run the native `codex.exe` directly; `node-pty` is installed in the background the first time. Set `"hudTakeover": false` in `~/.codex/model-ladder.json` to remove the function again.
 Windows requires native `codex.exe`, selected through PATH or `CODEX_BINARY`, rather than a `.cmd` or `.bat` shim.
 
 ## Concurrent runs
@@ -74,7 +74,7 @@ Pruning removes completed artifacts but preserves active runs, conflicts, patche
 | DIRECT | Supply actual `contextTokens` and `contextWindow`; the router must also judge the task small. |
 | Complete DIRECT | Edit only the returned `worktreePath`, then resubmit the original input with `directRun` and `directSummary`. |
 | Force normal ladder | Use `forceLadder: true`, which also disables split suggestions. |
-| Run a large task whole | Use `acceptSplit: false` after choosing that option. |
+| Run a large task | No split confirmation is required; if the forecast says usage may run out, answer the usage-risk question (`acceptUsageRisk: true` continues). |
 | Commit | Explicitly enable `commit: true` to commit verified files without unrelated staged changes. |
 | Resume a timeout | Reuse the original input and returned `resumeRun`; the skill retries automatically at most twice. |
 
@@ -104,7 +104,6 @@ Personal files are `~/.claude/model-ladder.json` and `~/.codex/model-ladder.json
 | `usageGuard` | Enabled, `90%` | Usage protection, preferably stored in the personal file. |
 | `worker_skills` / `verifier_skills` | Empty | Natural-language role instructions. |
 | `direct_threshold` | `30` | Context percentage for small-task DIRECT, or `"off"`. |
-| `split_minutes` | `20` | Duration above which splitting is suggested, or `"off"`. |
 | `autoRun` / `band` | `true` | Default routing and display controls. |
 
 Claude model aliases follow available versions; configure Codex model IDs and efforts for your account.
@@ -121,7 +120,7 @@ Without explicit `verify`, Codex prefers a project verify skill, then discovers 
 | `MODEL_LADDER_NO_UPDATE_CHECK=1` | Disable version checks. |
 
 Claude plugin role instructions provide defaults that project keys override, including an explicit empty string.
-Use one rule per line: `model-ladder: use plugin:skill` applies only when the main repo folder is exactly `model-ladder`; lines without a colon apply globally.
+Use one rule per line: `model-ladder: use plugin:skill` applies only when the main repo folder is exactly `model-ladder`; lines without a `project: ` prefix apply globally, including ones with a colon such as `use ponytail:ponytail`.
 The first colon separates the project name; matching bodies retain later colons, and empty or unresolved `${...}` values add no instructions.
 Unavailable capabilities are reported before execution and in the final report, for example: `ponytail` is not available in this project.
 Role instructions may name skills, plugins, slash commands, or MCP servers, but cannot expand permissions, permit verifier edits, or recurse into the ladder.
@@ -137,7 +136,7 @@ Basic fields and controls are shown in the [README](README.md#band-claude-code).
 | Guard controls | Save only the changed field to personal settings; project overrides remain effective. |
 | Threshold | Enter or 5 seconds without typing saves it without changing the guard switch. |
 | Instructions | Only matching and global rules appear, without a label prefix; the Band previews one line and its arrow expands or collapses the text. |
-| Claude handoff | `handoff now` writes a template, then submits `/model-ladder:handoff` when the session is idle. |
+| Claude handoff | `handoff now` writes a template, then runs `/model-ladder:handoff` when the session is idle. With the usage guard on, the band does the same once when a usage window reaches the threshold. |
 | Handoff fallback | If submission fails, a toast gives the command; the template remains available. |
 | Codex controls | Enter `g`, `t 90`, `h`, or `q`, followed by Enter. |
 | CLI controls | `watch.mjs` accepts `--guard on|off`, `--threshold 1-100`, and `--handoff`. |
@@ -166,3 +165,37 @@ Claude usage comes from the Band or `scripts/usage-statusline.mjs`; only Pro/Max
 The main session adds the goal, decisions, completed work, next steps, and resume instructions above the unchanged generated verification appendix, which remains authoritative.
 If the session cannot call a model, keep the template as the fallback.
 A force-killed run may lack a checkpoint or `result.json`; inspect its draft and restart the original task after quota reset instead of inventing `resumeRun`.
+
+Duration forecasts are stored in live/result/history JSON; the panel time column shows elapsed/expected.
+A worker, test-writer or verifier row shows its own elapsed time over its own expected duration (router, diagnose and final-diagnosis rows show elapsed time only): the median phase duration from `forecast.phases` of comparable successful runs (VERIFIED, completed, uncensored, within 90 days, same runtime), keyed by phase plus model/effort once at least two runs have it and by phase alone before that. With no samples for a phase, the router's `workerMinutes` and `verifyMinutes` (positive integer wall-clock minutes for one worker attempt and one verification, carried in the plan and written into the run lock's `phaseExpected` after routing; Codex writes them into `live.expected`) stand in for it; history samples keep priority. Without either the row shows elapsed time only.
+Claude Code reads the table live from the run lock's `phaseExpected` (written at each workflow boundary) and the Codex panel reads `expected` in `live.json`; a finished row keeps the value it ended with. Once a running row has been running at least as long as its expected duration, the shown expected duration is recalibrated in steps: the expected value plus the smallest whole number of steps of max(1 minute, half the expected value) that lands above the elapsed time (7m expected shows 14m at 12m elapsed and 17.5m at 14m, so the denominator changes only at step boundaries). A finished row keeps its original expected duration, so an overrun stays visible as `✓ 12m/7m`.
+The Claude Code band also shows one `background` row per in-flight background task of this session (a Bash call with `run_in_background`, or an async Workflow launch other than the ladder's own) that the main session started, not a subagent: elapsed time only, with the task `<kind>: <label>` (`shell` or `workflow`). The rows show only while Claude is not running a turn and no ladder agent runs, and each leaves when its task-notification arrives.
+They cover routing, implementation and self-checks, test commands, independent
+verification and retry risk. Router ranges are uncalibrated judgments until
+comparable successful histories supply empirical min/median/max error ratios.
+Those ranges are observations, not confidence intervals or accuracy claims.
+Original forecasts, boundary updates, phase models, efforts, tokens and clock timings,
+actual elapsed time and signed/absolute error remain in history. Interrupted,
+DIRECT, errored and aborted runs are censored; failed runs are retained but never
+used as successful calibration evidence. Comparability requires the same runtime,
+starting cell, router, verifier, verification command, attempt limit, router estimate and task mode;
+only the last 90 days are used. Continuations use separate histories and retain
+the earlier original forecast. Without comparable continuation data, their bounds
+remain unknown.
+
+Usage is assessed separately for each available subscription window, against both
+100% headroom and the enabled guard threshold. Minutes and tokens never convert to
+subscription percentages. Evidence needs fresh before/after samples, the same
+source, account identity and reset, nondecreasing percentages and attributable
+exclusive account activity. Boundary checks conservatively compare full-run
+consumption with current headroom. They do not assume a linear consumption rate.
+The current providers cannot prove absence of other account activity,
+so their observations normally yield unknown with reasons. Missing timestamps,
+stale samples, resets, incomplete and failed runs cannot establish sufficiency.
+Estimates do not bypass or replace the existing live usage guard.
+
+Claude records wall-clock boundaries through the Node forecast recorder around
+each Workflow call; the workflow itself reads no clock and imports nothing. A
+structured journal continues one agent at a time without repeating model calls.
+These timings include host overhead and gaps inside each call; preflight-to-finish
+elapsed time includes user/host waits. Open boundaries are censored on errors.

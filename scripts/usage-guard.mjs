@@ -5,10 +5,13 @@
 // usage is null when unknown; "error" is set when the settings cannot be read. Only enabled with a known usage at
 // or above the threshold stops a run. usageGuard stays one personal setting shared by every project.
 //
-// Over the limit nothing waits for the current agent: forceStopRuns() kills every other model-ladder runner on this
+// Over the limit, Codex runners stop live: forceStopRuns() kills every other registered model-ladder runner on this
 // machine (with its Codex child processes) and writes that repository's .model-ladder/HANDOFF.md. Runners register
 // in one machine-wide directory (activeDir) while they run. `--enforce` does the same from the command line when the
 // guard says stop, and adds the stopped run IDs: {"enabled":true,"threshold":90,"usage":95,"stopped":["codex-..."]}
+// Claude Code agents are not killed mid-call: a Claude run stops at its next check (preflight, or the verifier after
+// an attempt), and the band (hooks/band/register.tsx) asks the main session for an AI-written handoff as soon as a
+// usage window reaches the threshold.
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

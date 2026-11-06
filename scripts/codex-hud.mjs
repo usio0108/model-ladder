@@ -1,3 +1,4 @@
+import { spawn as nodeSpawn } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -58,14 +59,25 @@ export function windowsCommand(command, args, cwd, env = process.env) {
   return { command: executable, args }
 }
 
-export async function runHud({ cwd = process.cwd(), args = [], input = process.stdin, output = process.stdout, command = process.env.CODEX_BINARY ?? 'codex', pty: injectedPty } = {}) {
+// Without node-pty there is no HUD, but `codex` must still work: run it directly and hand back its exit code.
+export function runPlain({ cwd, args, command, spawn = nodeSpawn, stderr = process.stderr }) {
+  if (process.platform === 'win32') ({ command, args } = windowsCommand(command, args, cwd))
+  stderr.write('model-ladder HUD unavailable (node-pty could not be loaded); starting plain codex.\n')
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, stdio: 'inherit', env: process.env })
+    child.once('error', reject)
+    child.once('close', (code) => resolve({ exitCode: code ?? 1 }))
+  })
+}
+
+export async function runHud({ cwd = process.cwd(), args = [], input = process.stdin, output = process.stdout, command = process.env.CODEX_BINARY ?? 'codex', pty: injectedPty, loadPty = () => import('node-pty'), spawn, stderr } = {}) {
   if (!input.isTTY || !output.isTTY) throw new Error('Codex HUD requires an interactive terminal')
   let pty = injectedPty
   if (!pty) try {
-    const module = await import('node-pty')
+    const module = await loadPty()
     pty = module.default ?? module
   } catch {
-    throw new Error('Codex HUD needs node-pty for Windows ConPTY support; run npm install in the model-ladder directory')
+    return runPlain({ cwd, args, command, spawn, stderr })
   }
   const size = () => terminalSize(output)
   let dimensions = size()

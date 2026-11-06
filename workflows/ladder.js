@@ -61,14 +61,109 @@ function isDirect(small, contextTokens, forceLadder, contextWindow, directThresh
   return contextPercent(contextTokens, contextWindow) >= directThreshold
 }
 
-// The router's wall-clock estimate (start to verified, test runs included) against the person's limit in minutes
-// (split_minutes, or "off"). Equal to the limit is fine. The caller skips this for forceLadder, DIRECT and acceptSplit:false.
-const DEFAULT_SPLIT_MINUTES = 20
+const FORECAST_MAX_AGE = 90 * 86400000
+const range = (values, provenance) => {
+  const sorted = values.filter((n) => Number.isFinite(n) && n >= 0).sort((a, b) => a - b)
+  return { optimistic: sorted[0] ?? null, mostLikely: sorted.length ? sorted[Math.floor(sorted.length / 2)] : null,
+    pessimistic: sorted.at(-1) ?? null, provenance, sampleCount: sorted.length }
+}
 
-function splitSuggestion(estimatedMinutes, split, limit = DEFAULT_SPLIT_MINUTES) {
-  if (!(typeof limit === 'number' && limit > 0)) return null
-  if (!(typeof estimatedMinutes === 'number' && estimatedMinutes > limit) || !Array.isArray(split) || !split.length) return null
-  return { estimatedMinutes, limit, parts: split }
+function comparableForecasts(key, rows, now) {
+  return rows.map((r) => r?.forecast).filter((f) => f?.version === 1 && f.key === key &&
+    f.actual?.status === 'VERIFIED' && f.actual.completed === true && f.actual.censored === false &&
+    Number.isFinite(f.actual.durationMs) && f.actual.durationMs >= 0 && Number.isFinite(f.startedAt) && f.actual.endedAt >= f.startedAt &&
+    Number.isFinite(f.actual.endedAt) && f.actual.endedAt <= now && now - f.actual.endedAt <= FORECAST_MAX_AGE)
+}
+
+function durationForecast(key, route, rows, now) {
+  const samples = comparableForecasts(key, rows, now).filter((f) => f.routerMinutes > 0)
+  const point = route.estimatedMinutes > 0 ? route.estimatedMinutes * 60000 : null
+  if (samples.length && point !== null) {
+    return { ...range(samples.map((f) => point * f.actual.durationMs / (f.routerMinutes * 60000)), 'observed-router-error-ratios'),
+      unit: 'ms', retryEvidence: { sampleCount: samples.length, retriedRuns: samples.filter((f) => f.phases?.filter((p) => p.phase === 'worker').length > 1).length },
+      reason: 'Empirical min/median/max of comparable completed runs; not a confidence interval. Includes routing, work, tests, verification and observed retries.' }
+  }
+  const lo = route.optimisticMinutes * 60000, hi = route.pessimisticMinutes * 60000
+  const valid = point !== null && Number.isFinite(lo) && lo > 0 && lo <= point && Number.isFinite(hi) && hi >= point
+  return { optimistic: valid ? lo : null, mostLikely: point, pessimistic: valid ? hi : null, unit: 'ms',
+    provenance: 'router-judgment', sampleCount: 0,
+    reason: valid ? 'Uncalibrated router judgment, including all phases and retry risk.' : 'Insufficient history and no valid router range; bounds unknown.' }
+}
+
+function remainingForecast(state, rows, now) {
+  const observed = state.phases
+  const prefix = observed.map((p) => `${p.phase}/${p.model}/${p.effort}/${p.complete}/${p.pass}`)
+  const samples = comparableForecasts(state.key, rows, now).filter((f) => prefix.every((p, i) => {
+    const phase = f.phases?.[i]
+    return phase && `${phase.phase}/${phase.model}/${phase.effort}/${phase.complete}/${phase.pass}` === p
+  }))
+  if (prefix.length && samples.length) {
+    const observed = samples.map((f) => f.actual.durationMs - f.phases[prefix.length - 1].elapsedMs)
+    return { ...range(observed, 'observed-phase-remainder'), unit: 'ms' }
+  }
+  const elapsed = Math.max(0, now - state.startedAt)
+  const original = state.original
+  const retry = observed.filter((p) => p.phase === 'worker').length > 1 || observed.some((p) => p.phase === 'diagnose' || p.pass === false || !p.complete)
+  const overdue = original?.pessimistic !== null && elapsed > original?.pessimistic
+  if (!original || retry || overdue) return { ...range([], 'insufficient-data'), unit: 'ms', reason: retry ? 'No comparable observed retry remainder' : 'No usable remaining forecast (missing or exceeded bounds)' }
+  return { ...original, ...Object.fromEntries(['optimistic', 'mostLikely', 'pessimistic'].map((k) => [k, original[k] === null || k === 'mostLikely' && elapsed >= original[k] ? null : Math.max(0, original[k] - elapsed)])), provenance: 'elapsed-original-forecast' }
+}
+
+function calibrationError(original, actualMs) {
+  if (!original || !Number.isFinite(actualMs)) return null
+  return { signedMs: original.mostLikely === null ? null : actualMs - original.mostLikely,
+    absoluteMs: original.mostLikely === null ? null : Math.abs(actualMs - original.mostLikely),
+    withinRange: original.optimistic === null || original.pessimistic === null ? null : actualMs >= original.optimistic && actualMs <= original.pessimistic }
+}
+
+function consumptionEvidence(f, window) {
+  const start = f.usageStart, end = f.usageEnd
+  const a = start?.windows?.[window], b = end?.windows?.[window]
+  if (f.actual?.status !== 'VERIFIED' || f.actual.censored || !f.actual.completed) return { reason: 'Run was not successfully completed' }
+  if (f.concurrentAccountActivity === true) return { reason: 'Concurrent account activity contaminated this observation' }
+  if (f.attribution?.exclusive !== true || !f.attribution?.source) return { reason: 'Concurrent account activity cannot be excluded; consumption is not attributable' }
+  if (!start?.accountId || start.accountId !== end?.accountId || start.accountId !== f.attribution.accountId) return { reason: 'Subscription account identity is missing or changed' }
+  if (![start?.sampledAt, end?.sampledAt, a?.used, b?.used, a?.resetsAt, b?.resetsAt].every(Number.isFinite)) return { reason: 'Missing subscription observations or reset identity' }
+  if (start.source !== end.source) return { reason: 'Subscription sample source changed' }
+  if (a.used < 0 || b.used > 100 || b.used < a.used) return { reason: 'Invalid or decreasing percentages' }
+  if (start.sampledAt > f.startedAt || f.startedAt - start.sampledAt > 900000 || end.sampledAt < f.actual.endedAt || end.sampledAt - f.actual.endedAt > 900000 || end.sampledAt <= start.sampledAt) return { reason: 'Stale or incomplete boundary observations' }
+  if (a.resetsAt !== b.resetsAt || a.resetsAt <= end.sampledAt) return { reason: 'Subscription window reset during observation' }
+  return { value: b.used - a.used }
+}
+
+function assessUsage(key, rows, current, guard, now, duration = null) {
+  const samples = comparableForecasts(key, rows, now)
+  const names = new Set([...Object.keys(current?.windows ?? {}), ...samples.flatMap((f) => Object.keys(f.usageStart?.windows ?? {}))])
+  if (!names.size) { names.add('five_hour'); names.add('seven_day') }
+  return Object.fromEntries([...names].map((name) => {
+    const window = current?.windows?.[name]
+    const fresh = Number.isFinite(current?.sampledAt) && current.sampledAt <= now && now - current.sampledAt <= 900000 && window?.resetsAt > now && Number.isFinite(window?.used) && window.used >= 0 && window.used <= 100
+    const evidence = samples.map((f) => current?.accountId && current.accountId === f.usageStart?.accountId ? consumptionEvidence(f, name) : { reason: 'No comparable subscription account identity' })
+    const estimate = { ...range(evidence.map((e) => e.value), 'observed-subscription-percentage-points'), unit: 'percentage-points' }
+    const headroom = fresh ? 100 - window.used : null
+    const guardHeadroom = fresh && guard?.enabled && Number.isFinite(guard.threshold) ? guard.threshold - window.used : null
+    const available = guardHeadroom === null ? headroom : Math.min(headroom, guardHeadroom)
+    const crossing = fresh && (samples.some((f) => now + f.actual.durationMs >= window.resetsAt) || Number.isFinite(duration?.pessimistic) && now + duration.pessimistic >= window.resetsAt)
+    const usable = fresh && !crossing && estimate.sampleCount > 0
+    const status = !usable ? 'unknown' : estimate.pessimistic <= available ? 'sufficient' : estimate.optimistic > available ? 'insufficient' : 'at-risk'
+    return [name, { status, headroom, guardHeadroom, estimate, scope: 'full-run-consumption',
+      reasons: !fresh ? ['Missing, stale or expired current window'] : crossing ? ['Forecast may cross this window reset'] : !estimate.sampleCount ? [...new Set(evidence.map((e) => e.reason).concat('Insufficient attributable comparable consumption data'))] : [] }]
+  }))
+}
+
+// The one pre-worker question: a window assessUsage already judged short. Unknown or missing data never asks.
+// `current` is a forecast update ({ usage, observation }); resetsAt is epoch ms, formatted by the caller.
+function usageRisk(current) {
+  const windows = Object.entries(current?.usage ?? {}).filter(([, a]) => a?.status === 'insufficient' || a?.status === 'at-risk').map(([window, a]) => {
+    const seen = current.observation?.windows?.[window]
+    const available = [a.headroom, a.guardHeadroom].filter(Number.isFinite)
+    return { window, status: a.status, used: seen?.used ?? null, resetsAt: seen?.resetsAt ?? null,
+      need: { optimistic: a.estimate?.optimistic ?? null, mostLikely: a.estimate?.mostLikely ?? null, pessimistic: a.estimate?.pessimistic ?? null, unit: 'percentage-points' },
+      available: available.length ? Math.min(...available) : null, headroom: a.headroom ?? null, guardHeadroom: a.guardHeadroom ?? null }
+  })
+  if (!windows.length) return null
+  const line = (w) => `${w.window} ${w.status}: ${w.used ?? '?'}% used, forecast needs ${w.need.optimistic ?? '?'}-${w.need.pessimistic ?? '?'} points, ${w.available ?? '?'} available`
+  return { reason: 'USAGE_RISK', windows, question: `The usage forecast says this run may exceed the usage available (${windows.map(line).join('; ')}). Continue anyway?` }
 }
 
 function isCell(choice, tiers) {
@@ -88,6 +183,12 @@ function guardStop(raw) {
 // An agent that failed because Claude's subscription limit is spent, as opposed to failing at the task.
 // Another agent would fail the same way until the reset, so the run stops and hands off. Independent of usageGuard.
 const HARD_LIMIT = /hit your (?:session |weekly |daily |opus |usage |5-hour )?limit|usage limit|rate[ _-]?limit|limit reached|too many requests|out of (?:extra )?usage|\b429\b/i
+
+// Claude Code sometimes refuses a freshly created, healthy isolation worktree ("Refusing to use <path> as an
+// isolation worktree: git could not be run to resolve it ..."). The refusal is transient: a new worktree works.
+function isolationRefused(measurement) {
+  return !measurement.limit && /Refusing to use\s[\s\S]*\sas an isolation worktree/i.test(measurement.error ?? '')
+}
 
 function hardLimit(text) {
   const message = String(text ?? '').trim()
@@ -117,9 +218,12 @@ const ROUTE_SCHEMA = {
     readOnly: { type: 'boolean' },
     smallReason: { type: 'string' },
     estimatedMinutes: { type: 'integer' },
-    split: { type: 'array', items: { type: 'object', properties: { task: { type: 'string' }, scope: { type: 'array', items: { type: 'string' } } }, required: ['task', 'scope'] } },
+    optimisticMinutes: { type: 'integer' },
+    pessimisticMinutes: { type: 'integer' },
+    workerMinutes: { type: 'integer' },
+    verifyMinutes: { type: 'integer' },
   },
-  required: ['model', 'effort', 'reason', 'goal', 'scope', 'verify', 'acceptance', 'allowTests', 'allowTestsReason', 'question', 'small', 'smallReason', 'estimatedMinutes', 'split'],
+  required: ['model', 'effort', 'reason', 'goal', 'scope', 'verify', 'acceptance', 'allowTests', 'allowTestsReason', 'question', 'small', 'smallReason', 'estimatedMinutes', 'optimisticMinutes', 'pessimisticMinutes', 'workerMinutes', 'verifyMinutes'],
 }
 
 const WORKER_SCHEMA = {
@@ -135,14 +239,31 @@ const WORKER_SCHEMA = {
   required: ['status', 'worktreePath', 'filesChanged', 'summary', 'selfCheck', 'blockedReason'],
 }
 
+// With worker skill instructions, the worker reports each capability they name; skippedSkills() holds it to them.
+const SKILLS_REPORT = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: { name: { type: 'string' }, applies: { type: 'boolean' }, available: { type: 'boolean' }, used: { type: 'boolean' }, note: { type: 'string' } },
+    required: ['name', 'applies', 'available', 'used', 'note'],
+  },
+}
+const workerSchema = () => (skillsSection(args.skills?.worker)
+  ? { ...WORKER_SCHEMA, properties: { ...WORKER_SCHEMA.properties, skills: SKILLS_REPORT }, required: [...WORKER_SCHEMA.required, 'skills'] }
+  : WORKER_SCHEMA)
+// A capability whose condition holds for this task and that the worker found, but did not invoke. One it could not
+// find is a reported blocker, not a skip: a stronger model would not find it either.
+const skippedSkills = (work) => (skillsSection(args.skills?.worker) ? (work.skills ?? []).filter((s) => s.applies && s.available && !s.used) : [])
+
 const VERDICT_SCHEMA = {
   type: 'object',
   properties: {
     pass: { type: 'boolean' },
     reason: { type: 'string' },
     output: { type: 'string' },
+    workerFiles: { type: 'array', items: { type: 'string' } },
   },
-  required: ['pass', 'reason', 'output'],
+  required: ['pass', 'reason', 'output', 'workerFiles'],
 }
 
 // preflight always passes usageGuard.command; the verifier runs it last and reports the guard settings and
@@ -187,7 +308,7 @@ function deadText(result) {
   return ''
 }
 
-async function measured(prompt, opts) {
+async function callAgent(prompt, opts) {
   const before = budget.spent()
   try {
     const result = await agent(prompt, opts)
@@ -204,6 +325,28 @@ async function measured(prompt, opts) {
   }
 }
 
+// The host measures one real agent per call. Earlier outputs replay locally;
+// they never re-spend tokens. No clock, filesystem or tool API in this workflow.
+const journal = [...(args?.journal ?? [])]
+let replayIndex = args?.plan && journal[0]?.phase === 'route' ? 1 : 0
+let executed = false
+async function measured(prompt, opts) {
+  const phaseName = opts.label.split(' ')[0]
+  if (args.telemetry && replayIndex < journal.length) {
+    const entry = journal[replayIndex++]
+    if (entry.phase !== phaseName || entry.model !== opts.model || entry.effort !== opts.effort) throw new Error('Workflow journal does not match this plan')
+    return entry.measurement
+  }
+  if (args.telemetry && executed) throw { boundary: true }
+  executed = true
+  const measurement = await callAgent(prompt, opts)
+  if (args.telemetry) {
+    journal.push({ phase: phaseName, model: opts.model, effort: opts.effort, measurement })
+    replayIndex++
+  }
+  return measurement
+}
+
 const LIMIT_SUGGESTION = 'Run /model-ladder:run again after the limit resets; see HANDOFF.md.'
 const limitFinal = (who, limit) => ({
   reason: `The ${who} hit Claude's subscription limit${limit.resets ? ` (resets ${limit.resets})` : ''}: ${limit.message}`,
@@ -214,7 +357,7 @@ async function route() {
   const { task, config } = args
   const verifyKnown = config.verify ? `The project sets the verify command: ${config.verify}` :
     args.hasVerifySkill ? 'The project has a verify skill; set verify to null, it will be used.' :
-    'Find the verify command the repo already has (a test suite in pyproject.toml, package.json, Makefile, pom.xml, ...). It must run checks that exist before this task. Never write a new check yourself, not even a one-line assert: that would let you, not the user, define done. Use null if the repo has no tests that cover this task. With no project verify, pick only targeted, fast existing tests that cover this change: list the relevant test files or globs (for example node --test tests/unit/a.test.mjs tests/unit/b.test.mjs, pytest tests/test_x.py, npm test -- path), never the whole suite or a bare directory; leave the full suite to CI. Never run node --test <directory>: Node 24 treats a directory as a module and fails, so list files or use a glob. If the task text already gives a verify command, use it as given.'
+    'Find the verify command the repo already has (a test suite in pyproject.toml, package.json, Makefile, pom.xml, ...). It must run checks that exist before this task. Never write a new check yourself, not even a one-line assert: that would let you, not the user, define done. Use null if the repo has no tests that cover this task. With no project verify, pick only targeted, fast existing tests that cover this change: list the relevant test files or globs (for example node --test tests/unit/a.test.mjs tests/unit/b.test.mjs, pytest tests/test_x.py, npm test -- path), never the whole suite or a bare directory; leave the full suite to CI. Never run node --test <directory>: Node 24 treats a directory as a module and fails, so list files or use a glob. If the task text already gives a verify command, use it as given. When the task changes hooks/band/register.tsx or hooks/band/register.test.ts in a plugin repo whose .claude-plugin has hooks *.test.ts files, the verify command should include `claude plugin test .` (it runs the band tests in the Claude Code host) instead of excluding register.test.ts.'
   const prompt = `You are the router of model-ladder. Read the task and the repo (read-only), then pick where the work starts.
 
 TASK
@@ -237,8 +380,8 @@ Also return:
 - small: true when the task touches one or two files and its design is already given (for example "implement this function as described"), so a capable model would finish it in one pass. Otherwise false.
 - smallReason: one sentence on why.
 - readOnly: true when the task only reads and reports (a review, an analysis, a question) and edits no file. Otherwise false.
-- estimatedMinutes: integer, your estimate of the wall-clock minutes from start until the verify step passes, including the time the tests take to run.
-- split: ${args.splitMinutes === 'off' ? 'always an empty array.' : `when estimatedMinutes is more than ${args.splitMinutes ?? DEFAULT_SPLIT_MINUTES}, the task cut into subtasks as an array of { task, scope } (task: one sentence a stranger could execute; scope: the files it changes), each verifiable on its own and run in order. Otherwise an empty array.`}`
+- estimatedMinutes (most likely), optimisticMinutes and pessimisticMinutes: positive integer wall-clock minutes for the FULL run, including routing, implementation, worker self-checks, test commands, independent verification, diagnosis and retry risk. Give an honest ordered range, not a guarantee.
+- workerMinutes and verifyMinutes: positive integer wall-clock minutes for ONE worker attempt (implementation and its self-checks) and for ONE independent verification run, so the band can show an expected duration before any history exists.`
   const { result: r, error, limit, tokens } = await measured(prompt, {
     label: `route ${label(config.router)}`, phase: 'Route', schema: ROUTE_SCHEMA, agentType: 'model-ladder:router', ...config.router,
   })
@@ -263,7 +406,11 @@ Also return:
     question: r.question,
     readOnly: r.readOnly === true,
     direct,
-    splitSuggestion: args.forceLadder || direct || args.acceptSplit === false ? null : splitSuggestion(r.estimatedMinutes, r.split, args.splitMinutes),
+    estimatedMinutes: r.estimatedMinutes,
+    optimisticMinutes: r.optimisticMinutes,
+    pessimisticMinutes: r.pessimisticMinutes,
+    workerMinutes: r.workerMinutes,
+    verifyMinutes: r.verifyMinutes,
     directReason: `${r.smallReason} The calling session holds about ${args.contextTokens} tokens of context, ${Math.round(contextPercent(args.contextTokens, args.contextWindow))}% of a ${args.contextWindow > 0 ? args.contextWindow : DEFAULT_WINDOW}-token window; the DIRECT threshold is ${args.directThreshold === 'off' ? 'off' : `${args.directThreshold ?? DEFAULT_DIRECT_THRESHOLD}%`}.`,
     // Without a verify step the user, not the router, decides what done means.
     needsAcceptance: !verify && !args.acceptance?.length,
@@ -313,7 +460,8 @@ function brief(plan, history, hint) {
     sections.push(`HINT\n  ${hint}`)
   }
   const skills = skillsSection(args.skills?.worker)
-  if (skills) sections.push(skills)
+  if (skills) sections.push(`${skills}\n\nIn the skills field of your report, list every capability these instructions name, one entry each: applies (its condition holds for this task), available (you found it here), used (you actually invoked it in this attempt), note (how it was used, or why not). An applicable capability that is available but not used fails this attempt, so invoke it before you report.`)
+  sections.push('EDITING RULES\n  Edit files with the Edit/Write tools, never through an interpreter one-off (python/node -e/sed scripts) whose failure can be silent.\n  If Python is genuinely needed, run it with `uv run` (ephemeral). If the project did not already use Python, delete everything that run created (.venv, uv.lock, __pycache__, scratch scripts) before reporting.\n  Before reporting done, run `git status --porcelain --untracked-files=all` in the worktree and confirm every file you claim in filesChanged shows a worker change (second column not a space, or ??).')
   sections.push('REPORT\n  worktreePath: the output of `git rev-parse --show-toplevel` (not pwd).\n  status "blocked" only if the task cannot be done; say why in blockedReason. In summary, include concise handoff context: progress, decisions, user constraints supplied in TASK, cautions, failed approaches, and next steps. Separate verified work from unverified claims. Do not infer parent conversation context.')
   return sections.join('\n\n')
 }
@@ -328,7 +476,8 @@ function verifyPrompt(plan, work) {
 1. ${args.setupPatch ? 'Confirm the setup patch is applied (the user\'s changes are present in the files it touches). If not, fail with reason "setup patch not applied". The user\'s starting changes are staged; the worker\'s changes are `git diff` (unstaged) plus untracked files, the `??` lines of step 2. Judge only those.' : 'Skip.'}
 2. Run \`git -C "${work.worktreePath}" status --porcelain --untracked-files=all\`. If any changed or new file matches one of these globs, fail with reason "modified protected file <path>": ${plan.protected.join(', ') || '(none)'}${setup}
    Ignore build artifacts that running code rewrites: ${ARTIFACTS.join(', ')}
-3. ${plan.verify ? `Run the verify step from the worktree root: ${plan.verify}\n   Pass only if it succeeds.` : 'There is no verify command. Judge each ACCEPTANCE item against the worker\'s changes (`git diff` plus new files). If the attempt changed no files, the task is read-only and the worker report below is the deliverable: judge it instead, and spot-check its claims against the sources it cites. Be strict: pass only if every item is clearly met.'}
+   Fill workerFiles from this output with only the worker's own paths: lines whose second (worktree) column is not a space, plus \`??\` lines. Leave out paths matching the build-artifact globs above, and leave out staged-only lines (second column a space): those are the user's setup patch.
+3. ${plan.verify ? `Run the verify step from the worktree root: ${plan.verify}\n   Pass only if it succeeds AND the worker's changes (\`git diff\` plus new files) meet every ACCEPTANCE item below.` : 'There is no verify command. Judge each ACCEPTANCE item against the worker\'s changes (`git diff` plus new files). If the attempt changed no files, the task is read-only and the worker report below is the deliverable: judge it instead, and spot-check its claims against the sources it cites. Be strict: pass only if every item is clearly met.'}
 
 ACCEPTANCE
 ${bullets(plan.acceptance)}
@@ -389,6 +538,7 @@ async function run(plan) {
       action: a.diagnosis?.action ?? null, actionReason: a.diagnosis?.reason ?? null,
       tokens: a.tokens, worktreePath: a.work?.worktreePath ?? null,
       modelContext: a.work?.summary ? { source: `worker ${label(a.cell)}`, text: a.work.summary } : null,
+      skills: a.work?.skills ?? null,
       diagnosisContext: a.diagnosis ? { source: `diagnosis ${label(a.cell)}`, text: [a.diagnosis.reason, a.diagnosis.hint].filter(Boolean).join('\n') } : null,
     })),
     winner: winner ? { worktreePath: winner.worktreePath, filesChanged: winner.filesChanged, summary: winner.summary } : null,
@@ -398,17 +548,27 @@ async function run(plan) {
 
   for (let n = 1; n <= config.maxAttempts; n++) {
     phase(`Attempt ${n}`)
-    const worker = await measured(brief(plan, history, hint), {
-      label: `worker ${label(cell)}`, phase: `Attempt ${n}`, schema: WORKER_SCHEMA,
+    const runWorker = () => measured(brief(plan, history, hint), {
+      label: `worker ${label(cell)}`, phase: `Attempt ${n}`, schema: workerSchema(),
       agentType: workerType, ...(plan.readOnly ? {} : { isolation: 'worktree' }), ...cell,
     })
-    tokens += worker.tokens
+    let worker = await runWorker()
+    let workerTokens = worker.tokens
+    // A transient host refusal of a healthy worktree: one more try with the same cell, no diagnosis, no escalation.
+    // A separate measured() call, so the boundary and journal replay still allow one agent per Workflow call.
+    if (isolationRefused(worker)) {
+      log(`#${n} ${label(cell)}: isolation worktree refused; retrying once with the same model and effort`)
+      worker = await runWorker()
+      workerTokens += worker.tokens
+    }
+    tokens += workerTokens
     const work = worker.result
     let verdict
     let verifyTokens = 0
     let limited = worker.limit && limitFinal(`worker ${label(cell)}`, worker.limit)
     if (!work) verdict = { pass: false, reason: `worker ${worker.error}`, output: '' }
     else if (work.status === 'blocked') verdict = { pass: false, reason: `worker blocked: ${work.blockedReason}`, output: '' }
+    else if (skippedSkills(work).length) verdict = { pass: false, reason: `worker skipped required skills: ${skippedSkills(work).map((s) => `${s.name} (${s.note})`).join('; ')}`, output: '' }
     else if (plan.readOnly && work.filesChanged.length) verdict = { pass: false, reason: `read-only task changed ${work.filesChanged.join(', ')}`, output: '' }
     // Without a verify command an empty diff can be a read-only task; the verifier judges the report instead.
     else if (!work.filesChanged.length && plan.verify) verdict = { pass: false, reason: 'worker changed nothing', output: '' }
@@ -419,9 +579,13 @@ async function run(plan) {
       verifyTokens = verifier.tokens
       verdict = verifier.result ?? { pass: false, reason: `verifier ${verifier.error}`, output: '' }
       limited = verifier.limit && limitFinal(`verifier ${label(verifierCell)}`, verifier.limit)
+      // The workflow cannot run git; the verifier's workerFiles is the only proof the worktree changed.
+      if (plan.verify && verdict.pass && !verdict.workerFiles?.length) {
+        verdict = { pass: false, reason: 'worker changed nothing (verifier saw no unstaged or untracked changes)', output: verdict.output }
+      }
     }
     tokens += verifyTokens
-    const attempt = { cell, work, verdict, diagnosis: null, tokens: worker.tokens + verifyTokens }
+    const attempt = { cell, work, verdict, diagnosis: null, tokens: workerTokens + verifyTokens }
     history.push(attempt)
     log(`#${n} ${label(cell)}: ${verdict.pass ? 'PASS' : `FAIL (${verdict.reason})`}`)
 
@@ -479,6 +643,7 @@ Explain to the user why it failed (reason) and what they can do next (suggestion
   return done('FAILED', null, final.result)
 }
 
+async function workflow() {
 if (!args?.task || !args?.config || !args?.protection) {
   throw new Error('model-ladder: this is the internal engine. Run /model-ladder:run <task> instead; it prepares these args and applies the result.')
 }
@@ -496,14 +661,26 @@ if (plan.limited) {
 }
 // The caller does a small task itself when its own context makes orchestration the bigger cost.
 if (!args.plan && plan.direct) {
-  return { status: 'DIRECT', plan: { goal: plan.goal, directReason: plan.directReason }, attempts: [], tokens: plan.routeTokens }
+  return { status: 'DIRECT', plan, attempts: [], tokens: plan.routeTokens }
 }
-// An unclear task is clarified first (its estimate would be a guess). Then a long one is offered in parts,
-// before asking for acceptance criteria that would belong to the whole.
+// Questions and user acceptance gate execution; a forecast short on usage asks once, below.
 if (!args.plan && plan.question) return { status: 'NEEDS_INPUT', plan }
-if (!args.plan && plan.splitSuggestion) return { status: 'NEEDS_INPUT', plan }
 if (!args.plan && plan.needsAcceptance) return { status: 'NEEDS_INPUT', plan }
 // With a run lock (runId from preflight) the skill first claims plan.scope against other active runs
 // (scripts/claim.mjs), then calls again with the plan.
 if (!args.plan && args.runId) return { status: 'ROUTED', plan }
+// The skill passes the forecast its boundary recorder returned after routing. Only an explicit yes continues,
+// and only before the first worker: replayed continuations never ask again. usageGuard and limits still apply.
+const risk = args.acceptUsageRisk === true || journal.some((e) => e.phase === 'worker') ? null : usageRisk(args.forecast?.current)
+if (risk) return { status: 'NEEDS_INPUT', reason: 'USAGE_RISK', plan, usageRisk: risk }
 return await run(plan)
+}
+
+try {
+  const result = await workflow()
+  return args?.telemetry ? { ...result, journal } : result
+} catch (error) {
+  if (args?.telemetry && error?.boundary) return { status: 'BOUNDARY', journal }
+  if (args?.telemetry) return { status: 'ERROR', journal, error: String(error?.message ?? error) }
+  throw error
+}

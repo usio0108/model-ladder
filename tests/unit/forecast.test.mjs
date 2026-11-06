@@ -1,0 +1,171 @@
+import '../helpers/isolate-home.mjs'
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { durationForecast, remainingForecast, consumptionEvidence, assessUsage, calibrationError } from '../../scripts/ladder-rules.mjs'
+import { routeForecast, withRouterMinutes, agentExpectations } from '../../scripts/forecast.mjs'
+
+const now = 10000000
+const route = { estimatedMinutes: 10, optimisticMinutes: 5, pessimisticMinutes: 30 }
+const sample = (overrides = {}) => ({ forecast: { version: 1, key: 'k', routerMinutes: 10,
+  startedAt: now - 600000,
+  actual: { status: 'VERIFIED', completed: true, censored: false, endedAt: now, durationMs: 600000 },
+  phases: [{ phase: 'route', model: 'cheap', effort: 'low', complete: true, elapsedMs: 100000 }], ...overrides } })
+
+test('full duration starts with an honest uncalibrated router range and preserves unknown bounds', () => {
+  const f = durationForecast('k', route, [], now)
+  assert.equal(f.optimistic, 300000)
+  assert.equal(f.mostLikely, 600000)
+  assert.equal(f.pessimistic, 1800000)
+  assert.equal(f.sampleCount, 0)
+  assert.equal(f.provenance, 'router-judgment')
+  assert.equal(durationForecast('k', { estimatedMinutes: 5 }, [], now).pessimistic, null)
+  assert.equal(durationForecast('k', { ...route, optimisticMinutes: 20 }, [], now).optimistic, null)
+})
+
+test('comparable recent completed runs calibrate router error including full retry duration', () => {
+  const rows = [sample(), sample({ actual: { ...sample().forecast.actual, durationMs: 1200000 } })]
+  const f = durationForecast('k', { estimatedMinutes: 20 }, rows, now)
+  assert.equal(f.sampleCount, 2)
+  assert.equal(f.optimistic, 1200000)
+  assert.equal(f.pessimistic, 2400000)
+  assert.equal(f.provenance, 'observed-router-error-ratios')
+  assert.deepEqual(calibrationError(f, 3000000), { signedMs: 600000, absoluteMs: 600000, withinRange: false })
+})
+
+test('legacy, failed, interrupted, future, stale and unrelated histories are not calibration', () => {
+  const actual = sample().forecast.actual
+  const rows = [null, { status: 'VERIFIED' }, sample({ key: 'other' }), sample({ actual: { ...actual, status: 'FAILED' } }),
+    sample({ actual: { ...actual, censored: true } }), sample({ actual: { ...actual, completed: false } }),
+    sample({ actual: { ...actual, endedAt: now + 1 } }), sample({ actual: { ...actual, endedAt: now - 91 * 86400000 } })]
+  assert.equal(durationForecast('k', route, rows, now).sampleCount, 0)
+})
+
+test('remaining estimates update at matching model/effort boundaries and expose unobserved retries', () => {
+  const f = sample().forecast
+  f.original = durationForecast('k', route, [], now)
+  assert.equal(remainingForecast(f, [sample()], now).mostLikely, 500000)
+  assert.equal(remainingForecast(f, [], now).mostLikely, null)
+  f.phases.push({ phase: 'diagnose', model: 'cheap', effort: 'low', complete: true })
+  assert.equal(remainingForecast(f, [], now).mostLikely, null)
+  assert.match(remainingForecast(f, [], now).reason, /retry/)
+})
+
+test('failed phase outcomes cannot borrow a successful phase remainder', () => {
+  const state = sample().forecast
+  state.phases[0].pass = false
+  state.original = durationForecast('k', route, [], now)
+  const successful = sample()
+  successful.forecast.phases[0].pass = true
+  assert.equal(remainingForecast(state, [successful], now).mostLikely, null)
+  assert.match(remainingForecast(state, [successful], now).reason, /retry/)
+})
+
+const consumption = () => sample({
+  attribution: { exclusive: true, source: 'provider-run-attribution', accountId: 'test' },
+  usageStart: { accountId: 'test', sampledAt: now - 600000, source: 'account', windows: { five_hour: { used: 20, resetsAt: now + 3600000 } } },
+  usageEnd: { accountId: 'test', sampledAt: now, source: 'account', windows: { five_hour: { used: 30, resetsAt: now + 3600000 } } },
+}).forecast
+
+test('only attributable fresh same-reset consumption is clean evidence', () => {
+  assert.equal(consumptionEvidence(consumption(), 'five_hour').value, 10)
+  const cases = [
+    (f) => { delete f.attribution },
+    (f) => { f.attribution.exclusive = false },
+    (f) => { f.concurrentAccountActivity = true },
+    (f) => { f.usageEnd.accountId = 'other-account' },
+    (f) => { f.usageEnd.windows.five_hour.used = 10 },
+    (f) => { f.usageStart.windows.five_hour.resetsAt++ },
+    (f) => { f.usageStart.sampledAt -= 900001 },
+    (f) => { f.usageEnd.sampledAt-- },
+    (f) => { f.usageEnd.source = 'other-account' },
+    (f) => { f.actual.status = 'FAILED' },
+    (f) => { f.actual.censored = true },
+    (f) => { f.usageEnd.windows.five_hour.resetsAt = now - 1 },
+  ]
+  for (const mutate of cases) {
+    const f = consumption(); mutate(f)
+    assert.equal(consumptionEvidence(f, 'five_hour').value, undefined)
+    assert.ok(consumptionEvidence(f, 'five_hour').reason)
+  }
+})
+
+test('each window compares observed percentage points with its guard and subscription headroom', () => {
+  const current = { accountId: 'test', sampledAt: now, windows: { five_hour: { used: 85, resetsAt: now + 3600000 }, seven_day: { used: 10, resetsAt: now + 86400000 } } }
+  const rows = [{ forecast: consumption() }]
+  let result = assessUsage('k', rows, current, { enabled: true, threshold: 90 }, now)
+  assert.equal(result.five_hour.status, 'insufficient')
+  assert.equal(result.five_hour.guardHeadroom, 5)
+  assert.equal(result.five_hour.estimate.mostLikely, 10)
+  assert.equal(result.seven_day.status, 'unknown')
+  assert.equal(assessUsage('k', rows, current, { enabled: false, threshold: 90 }, now).five_hour.status, 'sufficient')
+  assert.equal(assessUsage('k', rows, current, {}, now, { pessimistic: 7200000 }).five_hour.status, 'unknown')
+  const second = consumption(); second.usageEnd.windows.five_hour.used = 40
+  current.windows.five_hour.used = 75
+  result = assessUsage('k', [...rows, { forecast: second }], current, { enabled: true, threshold: 90 }, now)
+  assert.equal(result.five_hour.status, 'at-risk')
+  current.windows.five_hour.resetsAt = now + 10
+  assert.match(assessUsage('k', rows, current, {}, now).five_hour.reasons[0], /reset/)
+  current.sampledAt = now - 900001
+  assert.equal(assessUsage('k', rows, current, {}, now).five_hour.status, 'unknown')
+})
+
+test('tokens and minutes alone never imply subscription sufficiency', () => {
+  const current = { accountId: 'test', sampledAt: now, windows: { five_hour: { used: 10, resetsAt: now + 3600000 } } }
+  const rows = [sample({ tokens: 100, routerMinutes: 1 })]
+  const r = assessUsage('k', rows, current, { enabled: true, threshold: 90 }, now).five_hour
+  assert.equal(r.status, 'unknown')
+  assert.equal(r.estimate.sampleCount, 0)
+  assert.equal(r.estimate.pessimistic, null)
+  assert.match(r.reasons.join(' '), /attributable/)
+})
+
+test('continuations preserve the earlier original and never reuse a full-run estimate as remaining work', () => {
+  const previousOriginal = durationForecast('k', route, [], now)
+  const state = { runtime: 'codex', config: {}, continuation: 'resume', previousOriginal }
+  routeForecast(state, { ...route, model: 'cheap', effort: 'low' }, 'test', [], now)
+  assert.equal(state.original.mostLikely, null)
+  assert.equal(state.original.provenance, 'insufficient-data')
+  assert.deepEqual(state.previousOriginal, previousOriginal)
+  const full = { runtime: 'codex', config: {} }
+  routeForecast(full, { ...route, model: 'cheap', effort: 'low' }, 'test', [], now)
+  assert.notEqual(full.key, state.key)
+})
+
+test('router minutes per phase reach the state, and fill only the phases history has no sample for', () => {
+  const state = { runtime: 'claude', config: {} }
+  routeForecast(state, { ...route, workerMinutes: 12, verifyMinutes: 3, start: { model: 'cheap', effort: 'low' } }, 'test', [], now)
+  assert.deepEqual([state.workerMinutes, state.verifyMinutes], [12, 3])
+  // Only positive integers count.
+  for (const bad of [0, -2, 1.5, NaN, '5', null, undefined]) {
+    const s = { runtime: 'claude', config: {} }
+    routeForecast(s, { ...route, workerMinutes: bad, verifyMinutes: bad, start: { model: 'cheap', effort: 'low' } }, 'test', [], now)
+    assert.deepEqual([s.workerMinutes, s.verifyMinutes], [undefined, undefined])
+  }
+  const minutes = { workerMinutes: 12, verifyMinutes: 3 }
+  assert.deepEqual(withRouterMinutes({ cells: {}, phases: {} }, minutes), { cells: {}, phases: { worker: 720000, verify: 180000 } })
+  // History wins per phase; cells are never touched.
+  const history = { cells: { 'worker/haiku/low': 1000 }, phases: { worker: 5000 } }
+  assert.deepEqual(withRouterMinutes(history, minutes), { cells: { 'worker/haiku/low': 1000 }, phases: { worker: 5000, verify: 180000 } })
+  assert.deepEqual(withRouterMinutes(history, {}), history)
+  assert.deepEqual(withRouterMinutes(history), history)
+})
+
+test('agentExpectations returns the raw samples behind its medians, filtered the same way', () => {
+  const NOW = 1_800_000_000_000
+  const phase = (name, model, effort, durationMs, extra = {}) => ({ phase: name, model, effort, durationMs, complete: true, ...extra })
+  const run = (phases, extra = {}) => ({ forecast: { version: 1, runtime: 'claude', phases, actual: { status: 'VERIFIED', completed: true, censored: false, endedAt: NOW - 1000 }, ...extra } })
+  const rows = [
+    run([phase('worker', 'haiku', 'low', 100_000), phase('worker', 'opus', 'high', 900_000)]),
+    run([phase('worker', 'haiku', 'low', 300_000)]),
+    run([phase('worker', 'haiku', 'low', 9_000_000)], { runtime: 'codex' }),
+    run([phase('worker', 'haiku', 'low', 9_000_000)], { actual: { status: 'FAILED', completed: true, censored: false, endedAt: NOW - 1000 } }),
+    run([phase('worker', 'haiku', 'low', 9_000_000, { complete: false }), phase('worker', 'haiku', 'low', 0)]),
+  ]
+  const table = agentExpectations(rows, 'claude', NOW)
+  assert.deepEqual([...table.samples['worker/haiku/low']].sort((a, b) => a - b), [100_000, 300_000])
+  assert.deepEqual([...table.samples.worker].sort((a, b) => a - b), [100_000, 300_000, 900_000])
+  // A cell with one sample has no cell entry, like the medians.
+  assert.equal(table.samples['worker/opus/high'], undefined)
+  assert.deepEqual(Object.keys(table.samples).sort(), ['worker', 'worker/haiku/low'])
+  assert.deepEqual(agentExpectations([], 'claude', NOW), { cells: {}, phases: {}, samples: {} })
+})

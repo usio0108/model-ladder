@@ -4,7 +4,56 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
-## [Unreleased]
+## [1.1.5] - 2026-11-06
+
+- Claude Code 的 usage guard 現在會自動交接：5 小時或 7 天用量視窗達到門檻時，Band 寫入交接模板並執行 `/model-ladder:handoff`，讓主 session 寫出 AI 版。每個視窗只觸發一次（重新載入或開新 session 也不重複），視窗降回門檻以下或重設後才會再觸發。沒有 ladder run 時也會交接，因為 handoff skill 依據對話內容撰寫。
+- `handoff now` 現在真的會請主 session 寫 AI 版交接。原本使用 `$.prompt.submit`，但 Claude Code 會拒絕以 `/` 開頭的文字，因此只會顯示退回提示；現改用 `$.command.run`。
+- Worker skill 指示改為強制檢查：設定 `worker_skills` 時，worker 須逐項回報指示中提到的能力（是否適用、是否可用、是否使用、說明）；適用且可用卻未使用時，該次嘗試在驗證前即判失敗（`worker skipped required skills: ...`）。不可用或不適用的能力不算失敗。finish 報告每次嘗試多一行 `Skills`。
+- DIRECT 路徑下，主 session 現在會自行遵循 `worker_skills`，並把 `verifier_skills` 交給 verifier，與 Codex runner 一致。
+
+## [1.1.4] - 2026-11-03
+
+- Claude Code band 不再為 ladder 自己的 Workflow 啟動（`workflow: ladder`）顯示 `background` 列，使用者已經知道 model-ladder 正在選擇模型；其他非同步 Workflow 啟動仍會顯示。
+- 在 subagent 裡發出的背景 Bash 或 Workflow（例如 verifier 在背景跑測試指令）不再新增背景列。它的 task-notification 只會送給該 subagent，主 session 收不到，所以以前任務結束後該列會一直留著。
+- Claude Code 拒絕 worker 的隔離 worktree（"git could not be run to resolve it"，屬暫時性失敗）時，worker 或 test-writer 會用同一個 model 與 effort 重試一次，不再以 `stop_environment` 停掉整個 run。
+- 清理時改用 `git worktree remove --force --force`，Claude Code 鎖住的 worktree 與其 `worktree-wf_*` 分支不再殘留。
+
+## [1.1.3] - 2026-11-02
+
+- 超時估計改用歷史資料：agent 列超過預期時長後，預期值改為至少 2 筆更長的過往紀錄的中位數（agentExpectations 現在也回傳原始樣本），否則顯示階梯式估計並在前面加 `~`（例如 `12m/~14m`），Claude Code band 與 Codex 面板皆適用；Claude Code band 中超時的 agent 列會以目前的工具活動（例如 `Bash: Run unit tests`）取代任務文字，讀不到時退回任務文字。
+- Windows 上的 Codex：SessionStart hook 會在 PowerShell profile 加入有標記的 `codex` 函式，在新的 PowerShell 視窗輸入 `codex` 就會開啟 model-ladder HUD；子指令、輸入輸出被導向、缺少 `node-pty` 或 Node.js 時執行原生 `codex.exe`，`node-pty` 會在背景安裝，設定 `"hudTakeover": false` 即可移除該函式。`node-pty` 無法載入時 HUD 也會改用一般 Codex。
+- band 用量列的百分比不再使用粗體，並改用固定顏色（50% 到用量保護門檻為黃色，達到或超過門檻為紅色），因為部分介面不會套用主題色。
+- 背景列也涵蓋主 session 在背景啟動的 subagent（Agent 工具的 run_in_background）：Claude 閒置時顯示 `agent: <描述>` 列，該 agent 結束後移除。
+- 背景任務被 TaskStop 停止時（不會送出 task-notification），其背景列也會移除，不再殘留在 band 上。
+- 背景 shell 列在同一指令（以第一行為準）曾經跑完後會顯示預期時長：取最近十次的中位數，跨 session 保留，超時時與 agent 列一樣重新估計；第一次執行只顯示經過時間。
+- Claude Code band 與 Codex 面板的時間欄標題由 `time` 改為 `act./est.`（實際經過 / 預估）。
+- Claude Code 的 verifier 與 diagnose 列現在也會顯示預期時長：它們的 prompt 沒有 TASK 行，且每個 ladder 步驟各是一次 workflow run，因此 band 對不到任務時改用唯一進行中的 ladder 鎖（同時有兩個以上的 run 時仍只顯示經過時間）。
+
+## [1.1.2] - 2026-11-02
+
+- Worker 新增編輯規則（僅用 Edit/Write 或 apply_patch、`uv run` 並清理、回報前檢查 `git status`）；band 檔案變更時 router 會建議 verify 包含 `claude plugin test .`。
+- Claude Code verifier 現在回傳 `workerFiles`（`git status` 中 worker 自己的未暫存與未追蹤路徑），有 verify 指令時須指令成功且每項 ACCEPTANCE 都達成才通過；通過但 `workerFiles` 為空的判定會改為失敗（`worker changed nothing`），讓 ladder 升級。
+- Claude Code band 與 Codex 面板中，執行中的 agent 列的經過時間達到預期時長後，會顯示重新估計的預期時長（預期值加上整數個步長，步長為 1 分鐘與預期值一半中較大者，直到超過經過時間，例如預期 7m 顯示 12m/14m）；已結束的列保留原本的預期時長。
+- Claude Code band 以背景列取代依鎖產生的 `no model` 列：本 session 每個進行中的 Bash 背景工作或非同步 Workflow 啟動各顯示一列 `background`（經過時間與 `<kind>: <label>`），只在 Claude 沒有執行回合且沒有 ladder agent 執行時顯示，收到該工作的通知後移除。`direct` 階段與 `phase.mjs <runId> direct` 步驟一併移除。
+- 只有 worker、test-writer、verifier 的列顯示預期時長；router、diagnose、final diagnosis 的列只顯示經過時間。
+- router 另外回傳 `workerMinutes` 與 `verifyMinutes`（單次 worker 嘗試與單次驗證的正整數實際分鐘數）。plan 會把它們寫入 run 鎖的各 agent 表，作為歷史沒有樣本的階段的預期值，讓 worker 與 verifier 列從第一次 run 起就有預期時長。歷史樣本（階段加模型/effort，其次依階段）仍然優先。
+- Codex router 也會回傳 `workerMinutes` 與 `verifyMinutes`（正整數，schema 會檢查）；路由後只在歷史沒有 worker 或 verify 樣本時補進 Codex 面板的各 agent 預期表，讓第一次 Codex run 的 worker 與 verifier 列就顯示「已跑 / 預估」。
+- band 用量列的百分比改為粗體並依程度上色：低於 50% 維持一般顏色，50% 到用量保護門檻為警告色，達到或超過門檻為錯誤色；其餘文字維持淡色。指示列的摺疊箭頭後面多留一格空白。
+
+## [1.1.1] - 2026-11-02
+
+- Claude Code band 與 Codex 面板中每個 agent 列（router、worker、test-writer、verifier）的時間欄，改為顯示「該 agent 自己的經過時間 / 自己的預期時長」，不再以整個 run 的預估總時長為分母。預期時長取自先前可比較成功 run 的階段計時中位數：有兩筆樣本時依「階段加模型/effort」，之前只依階段；沒有樣本時只顯示經過時間。
+- 執行中的列即時讀取預期時長，spawn 時 run 還沒有預估也不會缺漏。`no model` 列維持顯示 run 經過時間與 run 預估總時長。
+
+## [1.1.0] - 2026-10-30
+
+- 耗時預估：耗時範圍、階段計時與各用量時間窗的餘額評估記錄於 live、result、history JSON，並以可比較的成功紀錄校準；移除拆分詢問。
+- Claude Code band 與 Codex 面板的時間欄顯示「經過/預估」（例如 `5s/12m`），沒有預估時只顯示經過時間。
+- 開跑預估顯示某個用量時間窗不足或有風險時，Claude Code 與 Codex 會在 worker 開始前詢問一次（`acceptUsageRisk: true` 為繼續）；用量保護照常生效。
+- 主 session 在 agent 之間持有 run 時（preflight、詢問、finish），Claude Code band 顯示 `no model` 列，不再顯示 `idle`。
+- band 將 `.model-ladder` 狀態寫到 repo 根目錄，不再寫到 shell 目前所在的子資料夾。
+- Codex 用量保護在角色執行期間可讀到即時用量；即使 stderr 有 sandbox 警告，Codex 用量上限錯誤也會寫出 `HANDOFF.md`。
+- 像 `use ponytail:ponytail` 這類含冒號的行維持全域；只有 `專案名稱: ` 前綴才會限定角色指示。
 
 ## [1.0.3] - 2026-10-30
 

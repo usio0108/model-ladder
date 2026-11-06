@@ -2,6 +2,7 @@ import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { roundSpan } from '../hooks/band/remaining.mjs'
+import { agentExpected, agentSamples, liveExpected } from '../hooks/band/rows.mjs'
 
 export function atomicJson(path, value) {
   mkdirSync(dirname(path), { recursive: true })
@@ -59,11 +60,19 @@ export function renderLive(state, { width = 80, now = Date.now(), guard = { enab
   }
   const lines = [`▴ ${dot}model-ladder ── ${window('fiveHour', '5h')} · ${window('sevenDay', '7d')}${idle ? ' · idle' : ''}`]
   const modelWidth = Math.min(32, Math.max(12, ...agents.map((a) => displayWidth(`${a.model}/${a.effort}`))))
-  lines.push(`${pad('model/effort', modelWidth)}  ${pad('time', 9)}  task`)
-  for (const agent of agents) {
+  // Elapsed, then "/" and this agent's own expected duration. A running row reads it from state.expected (the
+  // expectations table, scripts/forecast.mjs agentExpectations) at every render; a finished row keeps agent.expectedMs.
+  const times = agents.map((agent) => {
     const seconds = Math.max(0, Math.floor(((agent.endedAt ? Date.parse(agent.endedAt) : now) - Date.parse(agent.startedAt)) / 1000))
-    const time = `${agent.endedAt ? agent.pass === false ? '✗ ' : '✓ ' : ''}${seconds}s`
-    const prefix = `${pad(`${agent.model}/${agent.effort}`, modelWidth)}  ${pad(time, 9)}  `
+    const live = agent.endedAt ? null : liveExpected(seconds * 1000, agentExpected(state?.expected, agent.phase, agent.model, agent.effort), agentSamples(state?.expected, agent.phase, agent.model, agent.effort))
+    const ms = agent.endedAt ? agent.expectedMs : live?.ms
+    const expected = Number.isFinite(ms) && ms > 0 ? `/${live?.approx ? '~' : ''}${roundSpan(ms)}` : ''
+    return `${agent.endedAt ? agent.pass === false ? '✗ ' : '✓ ' : ''}${seconds}s${expected}`
+  })
+  const timeWidth = Math.max(12, ...times.map(displayWidth))
+  lines.push(`${pad('model/effort', modelWidth)}  ${pad('act./est.', timeWidth)}  task`)
+  for (const [i, agent] of agents.entries()) {
+    const prefix = `${pad(`${agent.model}/${agent.effort}`, modelWidth)}  ${pad(times[i], timeWidth)}  `
     lines.push(prefix + truncate(`${agent.phase}: ${agent.task}`, Math.max(0, width - displayWidth(prefix))))
   }
   const withs = Object.entries(state?.skills ?? {}).filter(([, skills]) => skills?.trim()).map(([role, skills]) => `${role} ${skills}`)

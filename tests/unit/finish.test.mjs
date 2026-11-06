@@ -65,3 +65,15 @@ test('aborted without a result is still accepted and cleans up', () => {
   assert.equal(r.status, 0)
   assert.ok(!existsSync(join(s.run, 'run.json')))
 })
+
+test('a locked worktree and its branch are removed (remove needs --force twice)', () => {
+  const s = setup()
+  const lock = git(s.dir, 'worktree', 'lock', '--reason', 'claude agent test', s.wt)
+  assert.equal(lock.status, 0, lock.stderr)
+  assert.match(git(s.dir, 'worktree', 'list').stdout, /locked/)
+  const r = finish(s.dir, { task: 't', aborted: 'no' })
+  assert.equal(r.status, 0, r.stderr)
+  assert.ok(!existsSync(s.wt), 'locked worktree directory removed')
+  assert.ok(!git(s.dir, 'worktree', 'list').stdout.includes('worktrees'), 'worktree unregistered')
+  assert.equal(git(s.dir, 'branch', '--list', 'worktree-w').stdout.trim(), '', 'its branch deleted')
+})
