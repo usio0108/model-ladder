@@ -170,11 +170,12 @@ test('codex SKILL.md: availability check, USAGE_LIMIT and requested handoff, tem
   assert.deepEqual(steps, steps.map((_, i) => i + 1))
 })
 
-test('band handoff button writes the template, then submits /model-ladder:handoff with a toast fallback', () => {
+test('band handoff button writes the template, then runs /model-ladder:handoff as a command with a toast fallback', () => {
   const text = read('hooks/band/register.tsx')
   assert.match(text, /HANDOFF_COMMAND = '\/model-ladder:handoff'/)
-  assert.match(text, /\$\.prompt\.submit\(\{ text: HANDOFF_COMMAND, asUser: true \}\)/)
-  assert.ok(text.indexOf('handoffText(live') < text.indexOf('$.prompt.submit'), 'template first')
+  // A command, not $.prompt.submit: the host refuses a prompt that starts with "/".
+  assert.match(text, /\$\.command\.run\(\{ command: HANDOFF_COMMAND\.slice\(1\) \}\)/)
+  assert.ok(text.indexOf('handoffText(live') < text.indexOf('$.command.run('), 'template first')
   assert.match(text, /run \$\{HANDOFF_COMMAND\} for the AI-written version/)
 })
 

@@ -136,7 +136,7 @@ Basic fields and controls are shown in the [README](README.md#band-claude-code).
 | Guard controls | Save only the changed field to personal settings; project overrides remain effective. |
 | Threshold | Enter or 5 seconds without typing saves it without changing the guard switch. |
 | Instructions | Only matching and global rules appear, without a label prefix; the Band previews one line and its arrow expands or collapses the text. |
-| Claude handoff | `handoff now` writes a template, then submits `/model-ladder:handoff` when the session is idle. |
+| Claude handoff | `handoff now` writes a template, then runs `/model-ladder:handoff` when the session is idle. With the usage guard on, the band does the same once when a usage window reaches the threshold. |
 | Handoff fallback | If submission fails, a toast gives the command; the template remains available. |
 | Codex controls | Enter `g`, `t 90`, `h`, or `q`, followed by Enter. |
 | CLI controls | `watch.mjs` accepts `--guard on|off`, `--threshold 1-100`, and `--handoff`. |

@@ -160,6 +160,64 @@ const track = async ($: EngineInterface, kind: Background['kind'], id: unknown, 
   } catch { /* bookkeeping only */ }
 }
 
+// The settings in effect here: defaults, the user's file plus the plugin's options, then the project's file.
+async function loadConfig($: EngineInterface, options: unknown) {
+  const project = await readJson($, await projectPath($))
+  const repoRoot = (await $.session.repo())?.root
+  const config = projectSkills(mergeConfig(BAND_DEFAULTS, { ...(await readJson($, await userPath($))), ...pluginLayer(options as any) }, project), repoRoot)
+  return { project, repoRoot, config }
+}
+
+// Writes the template HANDOFF.md, then asks the main session to write the AI version. The button calls it, and so
+// does the usage guard when a window reaches its threshold (auto): the guard hands off even with no ladder run, since
+// the handoff skill writes from the conversation itself.
+async function handoff($: EngineInterface, auto = false) {
+  const dir = `${await repoRootOf($)}/.model-ladder`
+  let last = null
+  try { last = JSON.parse((await $.fs.read(`${dir}/history.jsonl`)).trim().split('\n').at(-1) ?? '') } catch { /* no history yet */ }
+  const live = (await read($, rows)).filter((r) => r.status === 'running')
+  if (!live.length && !last && !auto) return $.ui.toast('model-ladder: no run to hand off')
+  const why = auto ? 'usage reached the usage guard threshold; ' : ''
+  if (live.length || last) {
+    try {
+      // The template is written first: it is the fallback if the main session never gets to write the AI version.
+      await $.fs.write(`${dir}/HANDOFF.md`, handoffText(live, await $.clock.now(), last))
+    } catch (error) {
+      return $.ui.toast(`model-ladder: ${why}handoff failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  // Asks the main session to write the real one: $.command.run runs the skill once the session is idle, as if the person
+  // typed it. Not $.prompt.submit: the host refuses a prompt that starts with "/".
+  const wrote = live.length || last ? `wrote the template ${dir}/HANDOFF.md and ` : ''
+  const fallback = () => $.ui.toast(`model-ladder: ${why}${wrote}could not ask this session; run ${HANDOFF_COMMAND} for the AI-written version`)
+  try {
+    void Promise.resolve($.command.run({ command: HANDOFF_COMMAND.slice(1) })).catch(fallback)
+    $.ui.toast(`model-ladder: ${why}${wrote}asked this session to write the AI version (${HANDOFF_COMMAND})`)
+  } catch {
+    fallback()
+  }
+}
+
+// Usage windows the guard has already handed off for, as "<kind>@<resetsAt>", kept in $.store so a reload or a new
+// session in the same window does not hand off again. A window re-arms when it is below the threshold (or the guard
+// is off) at a measure, or when it resets (a new resetsAt is a new key).
+const HANDED_OFF = 'guardHandedOff'
+async function guardHandoff($: EngineInterface, options: unknown, limits: { kind: string; percentUsed: number; resetsAt?: string | null }[]) {
+  const guard = (await loadConfig($, options)).config.usageGuard ?? {}
+  const enabled = guard.enabled ?? GUARD_DEFAULT.enabled
+  const threshold = guard.threshold ?? GUARD_DEFAULT.threshold
+  const windows = limits.filter((w) => WINDOW[w.kind] && typeof w.percentUsed === 'number')
+  const over = windows.filter((w) => enabled && w.percentUsed >= threshold)
+  const before = ((await $.store.get(HANDED_OFF).catch(() => undefined)) ?? []) as string[]
+  const keyOf = (w: { kind: string; resetsAt?: string | null }) => `${w.kind}@${w.resetsAt ?? ''}`
+  const below = new Set(windows.filter((w) => !over.includes(w)).map((w) => w.kind))
+  const kept = before.filter((k) => !below.has(k.split('@')[0]))
+  const fresh = over.filter((w) => !kept.includes(keyOf(w)))
+  const after = [...kept, ...fresh.map(keyOf)]
+  if (after.length !== before.length || after.some((k, i) => k !== before[i])) await $.store.set(HANDED_OFF, after)
+  if (fresh.length) await handoff($, true)
+}
+
 export const register: Register = (on, options) => {
   // Redraws once a second while an agent runs, so its elapsed time moves.
   let tick: Timer | null = null
@@ -181,7 +239,8 @@ export const register: Register = (on, options) => {
   let bgTick: Timer | null = null
 
   // Records the subscription usage where preflight and the verifier read it, so the usage guard needs no statusline.
-  // It runs with the band hidden too: the guard depends on it, not on the drawing.
+  // It runs with the band hidden too: the guard depends on it, not on the drawing. At the guard's threshold it also
+  // hands off once per window (guardHandoff).
   on('session.measure', async ($, e, next) => {
     const text = formatContext(e.context)
     if (text !== (await read($, contextText))) {
@@ -205,6 +264,7 @@ export const register: Register = (on, options) => {
     if (e.rateLimits.length) {
       const usage = { five_hour: window('five_hour'), seven_day: window('seven_day'), updatedAt: Math.floor((await $.clock.now()) / 1000) }
       await $.fs.write(`${await repoRootOf($)}/.model-ladder/usage.json`, JSON.stringify(usage)).catch(() => undefined)
+      await guardHandoff($, options, e.rateLimits).catch(() => undefined)
     }
     return next(e)
   })
@@ -384,12 +444,7 @@ export const register: Register = (on, options) => {
     const bgTask = (t: Background) => `${t.kind}: ${t.label}`
     const idle = running.length || bg.length ? '' : ' · idle'
 
-    const project = await readJson($, await projectPath($))
-    const repoRoot = (await $.session.repo())?.root
-    const config = projectSkills(
-      mergeConfig(BAND_DEFAULTS, { ...(await readJson($, await userPath($))), ...pluginLayer(options) }, project),
-      repoRoot,
-    )
+    const { project, repoRoot, config } = await loadConfig($, options)
     const guard = config.usageGuard ?? {}
     // Display only: a missing setting shows as the default (on, 90%) and is never written back.
     const enabled = guard.enabled ?? GUARD_DEFAULT.enabled
@@ -421,27 +476,6 @@ export const register: Register = (on, options) => {
     const withs = [skill(config.worker_skills), skill(config.verifier_skills)].filter(Boolean)
     const skillText = withs.join(' · ')
     const skillsFolded = await read($, areSkillsFolded)
-    const handoff = async () => {
-      const dir = `${await repoRootOf($)}/.model-ladder`
-      let last = null
-      try { last = JSON.parse((await $.fs.read(`${dir}/history.jsonl`)).trim().split('\n').at(-1) ?? '') } catch { /* no history yet */ }
-      const live = (await read($, rows)).filter((r) => r.status === 'running')
-      if (!live.length && !last) return $.ui.toast('model-ladder: no run to hand off')
-      try {
-        // The template is written first: it is the fallback if the main session never gets to write the AI version.
-        await $.fs.write(`${dir}/HANDOFF.md`, handoffText(live, await $.clock.now(), last))
-      } catch (error) {
-        return $.ui.toast(`model-ladder: handoff failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      // Asks the main session to write the real one: $.prompt.submit runs once the session is idle, as the person's own words.
-      const fallback = () => $.ui.toast(`model-ladder: wrote the template ${dir}/HANDOFF.md; run ${HANDOFF_COMMAND} for the AI-written version`)
-      try {
-        void Promise.resolve($.prompt.submit({ text: HANDOFF_COMMAND, asUser: true })).catch(fallback)
-        $.ui.toast(`model-ladder: wrote the template ${dir}/HANDOFF.md and asked this session to write the AI version (${HANDOFF_COMMAND})`)
-      } catch {
-        fallback()
-      }
-    }
     // The project file can still pin a guard field; the person's change is saved, and they are told it does not apply here.
     const pinNote = (field: string) => projectPins(project, field)
       ? $.ui.toast(`model-ladder: saved to your own settings, but .claude/model-ladder.json sets usageGuard.${field} for this project and wins`)
@@ -511,7 +545,7 @@ export const register: Register = (on, options) => {
           {enabled && 'Input' in els && <Text dimColor> % </Text>}
           {enabled && !('Input' in els) && <Text dimColor>  threshold {threshold}%</Text>}
           <Text dimColor>  </Text>
-          <Button key="handoff" plain label="handoff now" onPress={() => { void handoff() }} />
+          <Button key="handoff" plain label="handoff now" onPress={() => { void handoff($) }} />
         </Box>
       </Box>
     )

@@ -754,3 +754,28 @@ test('telemetry: the isolation retry is its own boundary and replays without res
   assert.equal(out.attempts.length, 1)
   assert.equal(out.tokens, 30)
 })
+
+test('worker skills: the report lists each named capability, and an applicable, available one left unused fails the attempt', async () => {
+  const skills = { worker: 'When coding, use ponytail.', verifier: '' }
+  const report = (s) => ({ ...done, skills: [{ name: 'ponytail', applies: true, available: true, note: 'n', ...s }] })
+  // Used: the verifier runs, and the result carries the report.
+  const used = await runWith([{ label: 'worker', result: report({ used: true }) }, { label: 'verify', result: pass }], { skills })
+  assert.equal(used.out.status, 'VERIFIED')
+  assert.ok(used.calls[0].schema.required.includes('skills'))
+  assert.match(used.calls[0].prompt, /In the skills field of your report/)
+  assert.deepEqual(used.out.attempts[0].skills.map((s) => s.used), [true])
+  // Applies, available, not used: failed without a verifier, named in the reason.
+  const skipped = await runWith([{ label: 'worker', result: report({ used: false, note: 'forgot' }) }, { label: 'diagnose', result: diag('stop_unclear', null, null) }], { skills })
+  assert.equal(skipped.out.attempts[0].pass, false)
+  assert.match(skipped.out.attempts[0].reason, /worker skipped required skills: ponytail \(forgot\)/)
+  assert.ok(!skipped.calls.some((c) => c.label.startsWith('verify')))
+  // Not found here, or not applicable: a reported blocker, not a skip.
+  for (const s of [{ used: false, available: false }, { used: false, applies: false }]) {
+    const r = await runWith([{ label: 'worker', result: report(s) }, { label: 'verify', result: pass }], { skills })
+    assert.equal(r.out.status, 'VERIFIED')
+  }
+  // No worker instructions: the schema asks for no report.
+  const none = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }])
+  assert.ok(!none.calls[0].schema.required.includes('skills'))
+  assert.equal(none.out.attempts[0].skills, null)
+})

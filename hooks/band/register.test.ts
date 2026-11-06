@@ -491,3 +491,59 @@ test('a background command seen before shows its past median as the expected dur
   expect(await ui.find({ type: 'Text', text: '2m/14m' })).toBeDefined()
   await ui.unmount()
 })
+
+// The usage guard hands off on its own: at the threshold a measure writes the template and submits the handoff skill,
+// once per window, again only after the window drops below the threshold or resets, and never with the guard off.
+const mountGuard = ($: any, on: any, guard: { enabled: boolean; threshold: number }) => {
+  mock.clock(on, { now: 1_700_000_000_000 })
+  mock.env(on, { HOME: '/home/test' })
+  const submits: string[] = []
+  const writes: string[] = []
+  const store: Record<string, unknown> = {}
+  on('session.cwd', () => ({ value: '/repos/app' }))
+  on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
+  on('fs.exists', ($: any, e: any) => ({ value: slash(e.path) === '/repos/app/.git' }))
+  on('fs.read', ($: any, e: any) => slash(e.path).endsWith('/home/test/.claude/model-ladder.json')
+    ? { value: JSON.stringify({ usageGuard: guard }) }
+    : { deny: 'File does not exist' })
+  on('fs.write', ($: any, e: any) => { writes.push(slash(e.path)); return { value: undefined } })
+  on('store.get', ($: any, e: any) => ({ value: store[e.key] }))
+  on('store.set', ($: any, e: any) => { store[e.key] = JSON.parse(JSON.stringify(e.value)); return { value: undefined } })
+  // The band runs the handoff skill as a command, as if the person typed it.
+  on('command.run', ($: any, e: any) => { submits.push(`/${e.command}`); return { text: '' } })
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.measure', ($: any, e: any) => ({ changed: e.changed }))
+  const measure = (fiveHour: number, resetsAt = '2023-11-14T23:00:00Z') => $.session.measure({
+    context: { tokens: 1000, window: 1_000_000 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: fiveHour, resetsAt }, { kind: 'seven_day', percentUsed: 10, resetsAt: '2023-11-20T00:00:00Z' }],
+    changed: ['rateLimits'],
+  })
+  return { submits, writes, measure }
+}
+
+test('usage guard: crossing the threshold submits the handoff once, re-arms below it or on a reset', async ($, on) => {
+  const { submits, measure } = mountGuard($, on, { enabled: true, threshold: 90 })
+  await measure(80)
+  expect(submits).toEqual([])
+  await measure(90)
+  expect(submits).toEqual(['/model-ladder:handoff'])
+  // Still above: no second submit.
+  await measure(93)
+  await measure(97)
+  expect(submits.length).toBe(1)
+  // Below, then above again: hands off again.
+  await measure(50)
+  await measure(91)
+  expect(submits.length).toBe(2)
+  // A reset is a new window: above in it hands off again.
+  await measure(95, '2023-11-15T04:00:00Z')
+  expect(submits.length).toBe(3)
+})
+
+test('usage guard: off never submits the handoff, whatever the usage', async ($, on) => {
+  const { submits, writes, measure } = mountGuard($, on, { enabled: false, threshold: 90 })
+  await measure(95)
+  await measure(99)
+  expect(submits).toEqual([])
+  expect(writes.some((p) => p.endsWith('/HANDOFF.md'))).toBe(false)
+})

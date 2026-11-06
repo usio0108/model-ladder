@@ -4,6 +4,13 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [1.1.5] - 2026-11-06
+
+- The usage guard now hands off on its own in Claude Code: when the five-hour or seven-day window reaches the threshold, the band writes the handoff template and runs `/model-ladder:handoff` so the main session writes the AI version. It does this once per window, persisted across reloads and new sessions, and again only after the window drops below the threshold or resets. It hands off even with no ladder run, since the handoff skill writes from the conversation.
+- `handoff now` now actually asks the main session for the AI-written handoff. It used `$.prompt.submit`, which Claude Code refuses for text that starts with `/`, so it only ever showed the fallback toast; it now uses `$.command.run`.
+- Worker skill instructions are enforced, not just suggested: with `worker_skills` set, the worker reports every capability they name (applies, available, used, note), and an attempt where one applies and is available but was not used fails before verification (`worker skipped required skills: ...`). Unavailable or not-applicable capabilities do not fail. The finish report shows a `Skills` line per attempt.
+- On the DIRECT path the main session now follows `worker_skills` itself and passes `verifier_skills` to its verifier, as the Codex runner already did.
+
 ## [1.1.4] - 2026-11-03
 
 - The Claude Code band no longer shows a `background` row for the ladder's own Workflow launch (`workflow: ladder`); you already know model-ladder is choosing a model. Other async Workflow launches still get a row.

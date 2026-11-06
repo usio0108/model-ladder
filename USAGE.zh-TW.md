@@ -162,7 +162,7 @@ Claude 外掛角色指示作為預設，專案同名鍵可覆蓋，空字串也�
 | 保護控制 | 只儲存修改的個人設定欄位，專案覆寫仍有效。 |
 | 門檻 | 按 Enter 或停止輸入 5 秒後儲存，不會改變保護開關。 |
 | 角色指示 | 只顯示符合專案與全域的規則且不加前綴，Band 預設預覽一行，點箭頭可展開或收合。 |
-| Claude 交接 | `handoff now` 先寫模板，再於 session 閒置時提交 `/model-ladder:handoff`。 |
+| Claude 交接 | `handoff now` 先寫模板，再於 session 閒置時執行 `/model-ladder:handoff`。usage guard 開啟時，用量視窗達到門檻也會自動執行一次。 |
 | 交接備案 | 提交失敗時 toast 顯示指令，模板仍可使用。 |
 | Codex 控制 | 輸入 `g`、`t 90`、`h` 或 `q` 後按 Enter。 |
 | CLI 控制 | `watch.mjs` 接受 `--guard on|off`、`--threshold 1-100`、`--handoff`。 |

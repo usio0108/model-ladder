@@ -239,6 +239,22 @@ const WORKER_SCHEMA = {
   required: ['status', 'worktreePath', 'filesChanged', 'summary', 'selfCheck', 'blockedReason'],
 }
 
+// With worker skill instructions, the worker reports each capability they name; skippedSkills() holds it to them.
+const SKILLS_REPORT = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: { name: { type: 'string' }, applies: { type: 'boolean' }, available: { type: 'boolean' }, used: { type: 'boolean' }, note: { type: 'string' } },
+    required: ['name', 'applies', 'available', 'used', 'note'],
+  },
+}
+const workerSchema = () => (skillsSection(args.skills?.worker)
+  ? { ...WORKER_SCHEMA, properties: { ...WORKER_SCHEMA.properties, skills: SKILLS_REPORT }, required: [...WORKER_SCHEMA.required, 'skills'] }
+  : WORKER_SCHEMA)
+// A capability whose condition holds for this task and that the worker found, but did not invoke. One it could not
+// find is a reported blocker, not a skip: a stronger model would not find it either.
+const skippedSkills = (work) => (skillsSection(args.skills?.worker) ? (work.skills ?? []).filter((s) => s.applies && s.available && !s.used) : [])
+
 const VERDICT_SCHEMA = {
   type: 'object',
   properties: {
@@ -444,7 +460,7 @@ function brief(plan, history, hint) {
     sections.push(`HINT\n  ${hint}`)
   }
   const skills = skillsSection(args.skills?.worker)
-  if (skills) sections.push(skills)
+  if (skills) sections.push(`${skills}\n\nIn the skills field of your report, list every capability these instructions name, one entry each: applies (its condition holds for this task), available (you found it here), used (you actually invoked it in this attempt), note (how it was used, or why not). An applicable capability that is available but not used fails this attempt, so invoke it before you report.`)
   sections.push('EDITING RULES\n  Edit files with the Edit/Write tools, never through an interpreter one-off (python/node -e/sed scripts) whose failure can be silent.\n  If Python is genuinely needed, run it with `uv run` (ephemeral). If the project did not already use Python, delete everything that run created (.venv, uv.lock, __pycache__, scratch scripts) before reporting.\n  Before reporting done, run `git status --porcelain --untracked-files=all` in the worktree and confirm every file you claim in filesChanged shows a worker change (second column not a space, or ??).')
   sections.push('REPORT\n  worktreePath: the output of `git rev-parse --show-toplevel` (not pwd).\n  status "blocked" only if the task cannot be done; say why in blockedReason. In summary, include concise handoff context: progress, decisions, user constraints supplied in TASK, cautions, failed approaches, and next steps. Separate verified work from unverified claims. Do not infer parent conversation context.')
   return sections.join('\n\n')
@@ -522,6 +538,7 @@ async function run(plan) {
       action: a.diagnosis?.action ?? null, actionReason: a.diagnosis?.reason ?? null,
       tokens: a.tokens, worktreePath: a.work?.worktreePath ?? null,
       modelContext: a.work?.summary ? { source: `worker ${label(a.cell)}`, text: a.work.summary } : null,
+      skills: a.work?.skills ?? null,
       diagnosisContext: a.diagnosis ? { source: `diagnosis ${label(a.cell)}`, text: [a.diagnosis.reason, a.diagnosis.hint].filter(Boolean).join('\n') } : null,
     })),
     winner: winner ? { worktreePath: winner.worktreePath, filesChanged: winner.filesChanged, summary: winner.summary } : null,
@@ -532,7 +549,7 @@ async function run(plan) {
   for (let n = 1; n <= config.maxAttempts; n++) {
     phase(`Attempt ${n}`)
     const runWorker = () => measured(brief(plan, history, hint), {
-      label: `worker ${label(cell)}`, phase: `Attempt ${n}`, schema: WORKER_SCHEMA,
+      label: `worker ${label(cell)}`, phase: `Attempt ${n}`, schema: workerSchema(),
       agentType: workerType, ...(plan.readOnly ? {} : { isolation: 'worktree' }), ...cell,
     })
     let worker = await runWorker()
@@ -551,6 +568,7 @@ async function run(plan) {
     let limited = worker.limit && limitFinal(`worker ${label(cell)}`, worker.limit)
     if (!work) verdict = { pass: false, reason: `worker ${worker.error}`, output: '' }
     else if (work.status === 'blocked') verdict = { pass: false, reason: `worker blocked: ${work.blockedReason}`, output: '' }
+    else if (skippedSkills(work).length) verdict = { pass: false, reason: `worker skipped required skills: ${skippedSkills(work).map((s) => `${s.name} (${s.note})`).join('; ')}`, output: '' }
     else if (plan.readOnly && work.filesChanged.length) verdict = { pass: false, reason: `read-only task changed ${work.filesChanged.join(', ')}`, output: '' }
     // Without a verify command an empty diff can be a read-only task; the verifier judges the report instead.
     else if (!work.filesChanged.length && plan.verify) verdict = { pass: false, reason: 'worker changed nothing', output: '' }

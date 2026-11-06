@@ -76,7 +76,7 @@ Claude 若需在外掛介面以外設定，使用 `~/.claude/model-ladder.json`�
 |---|---|---|
 | `autoRun` | `true` | 預設使用 ladder。 |
 | `band` | `true` | 顯示 Band 或 panel。 |
-| `worker_skills`（**Worker skill instructions**） | 空白 | 指定 worker 與 test-writer 使用的 skills 或工具。 |
+| `worker_skills`（**Worker skill instructions**） | 空白 | 指定 worker 與 test-writer 使用的 skills 或工具。worker 須逐項回報指示中的能力；適用且可用卻未使用時，該次嘗試判為失敗。 |
 | `verifier_skills`（**Verifier skill instructions**） | 空白 | 指定驗證時使用的 skills 或工具。 |
 | `direct_threshold` | `30` | 小任務使用 DIRECT 的 context 百分比門檻，`off` 停用。 |
 | `usageGuard` | 開啟、`90%` | 達到設定的用量門檻時停止。 |
@@ -114,9 +114,9 @@ haiku-5.5/low       5s         Summarize the README install steps
 | 任務列 | 顯示模型、effort、耗時（worker、test-writer、verifier 列另外顯示「/」與自己的預期時長，來自歷史或 router 給的分鐘數；其他列只顯示耗時）與任務；本 session 主迴圈發出的每個進行中 Bash 背景工作或非同步 Workflow 啟動（不含 ladder 自己的 Workflow 與 subagent 發出的呼叫）各有一列 `background`（耗時與任務 `<kind>: <label>`），只在 Claude 沒有執行回合且沒有 ladder agent 執行時出現。 |
 | `▴` / `▾` | 收合或展開 Band。 |
 | 指示箭頭 | 只顯示生效指示且不加 `skill instructions:` 前綴，預設收成一行，以 `▸` 展開、`▾` 收合。 |
-| `usage guard` | 開關使用量保護。 |
+| `usage guard` | 開關使用量保護。任一用量視窗達到門檻時，Band 會自動交接一次（同 `handoff now`），該視窗降回門檻以下或重設後才會再次交接。 |
 | `threshold` | 設定 1–100% 門檻，按 Enter 或停止輸入 5 秒後儲存。 |
-| `handoff now` | 寫入交接模板並提交 `/model-ladder:handoff`，讓主 session 改寫，不取消目前 run。 |
+| `handoff now` | 寫入交接模板並執行 `/model-ladder:handoff`，讓主 session 改寫，不取消目前 run。 |
 
 保護控制寫入個人設定，專案若有覆寫仍以專案設定為準。
 

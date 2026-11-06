@@ -4,6 +4,13 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [1.1.5] - 2026-11-06
+
+- Claude Code 的 usage guard 現在會自動交接：5 小時或 7 天用量視窗達到門檻時，Band 寫入交接模板並執行 `/model-ladder:handoff`，讓主 session 寫出 AI 版。每個視窗只觸發一次（重新載入或開新 session 也不重複），視窗降回門檻以下或重設後才會再觸發。沒有 ladder run 時也會交接，因為 handoff skill 依據對話內容撰寫。
+- `handoff now` 現在真的會請主 session 寫 AI 版交接。原本使用 `$.prompt.submit`，但 Claude Code 會拒絕以 `/` 開頭的文字，因此只會顯示退回提示；現改用 `$.command.run`。
+- Worker skill 指示改為強制檢查：設定 `worker_skills` 時，worker 須逐項回報指示中提到的能力（是否適用、是否可用、是否使用、說明）；適用且可用卻未使用時，該次嘗試在驗證前即判失敗（`worker skipped required skills: ...`）。不可用或不適用的能力不算失敗。finish 報告每次嘗試多一行 `Skills`。
+- DIRECT 路徑下，主 session 現在會自行遵循 `worker_skills`，並把 `verifier_skills` 交給 verifier，與 Codex runner 一致。
+
 ## [1.1.4] - 2026-11-03
 
 - Claude Code band 不再為 ladder 自己的 Workflow 啟動（`workflow: ladder`）顯示 `background` 列，使用者已經知道 model-ladder 正在選擇模型；其他非同步 Workflow 啟動仍會顯示。

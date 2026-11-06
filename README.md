@@ -82,7 +82,7 @@ For Claude settings outside the plugin screen, use `~/.claude/model-ladder.json`
 |---|---|---|
 | `autoRun` | `true` | Use the ladder by default. |
 | `band` | `true` | Show the band or panel. |
-| `worker_skills` (**Worker skill instructions**) | Empty | Skills or tools for workers and test-writers. |
+| `worker_skills` (**Worker skill instructions**) | Empty | Skills or tools for workers and test-writers. Each worker reports every named capability; one that applies and is available but was not used fails the attempt. |
 | `verifier_skills` (**Verifier skill instructions**) | Empty | Skills or tools for verification. |
 | `direct_threshold` | `30` | Context percentage for small tasks to use DIRECT; `off` disables it. |
 | `usageGuard` | On, `90%` | Stop at the configured usage threshold. |
@@ -120,9 +120,9 @@ haiku-5.5/low       5s         Summarize the README install steps
 | Task rows | Show the model, effort, the agent's elapsed time (worker, test-writer and verifier rows add "/" and their own expected duration, from history or the router's minutes; other rows show elapsed only), and task. A `background` row (elapsed time, task `<kind>: <label>`) appears for each in-flight Bash background task or async Workflow launch the main session started (not the ladder's own Workflow, not a subagent's call), only while Claude is not running a turn and no ladder agent runs. |
 | `▴` / `▾` | Collapse or expand the band. |
 | Instruction arrow | Show only applicable instructions without the `skill instructions:` prefix; expand the single-line preview with `▸` and collapse with `▾`. |
-| `usage guard` | Toggle usage protection. |
+| `usage guard` | Toggle usage protection. When a usage window reaches the threshold, the band hands off once on its own, as `handoff now` does; it hands off again only after that window drops below the threshold or resets. |
 | `threshold` | Set a threshold from 1 to 100%, saved on Enter or after 5 seconds without typing. |
-| `handoff now` | Write the handoff template and submit `/model-ladder:handoff` for the main session to rewrite it without cancelling the run. |
+| `handoff now` | Write the handoff template and run `/model-ladder:handoff` for the main session to rewrite it without cancelling the run. |
 
 Guard controls save to your personal settings, and project overrides still take priority.
 

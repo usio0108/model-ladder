@@ -99,6 +99,10 @@ function report(task, result, outcome, notes) {
     `Applied   ${result.status === 'VERIFIED' ? applied : 'nothing (no verified attempt)'}`,
     `Tokens    ${result.tokens} output (route + attempts)`,
   ]
+  // What each worker reported doing with the configured skill instructions.
+  const skillState = (s) => (s.used ? 'used' : !s.applies ? 'not applicable' : !s.available ? 'unavailable' : 'skipped')
+  const skills = (result.attempts ?? []).flatMap((a, i) => a.skills?.length ? [`#${i + 1} ${a.skills.map((s) => `${s.name} ${skillState(s)}`).join(', ')}`] : [])
+  if (skills.length) lines.push(`Skills    ${skills.join(' · ')}`)
   if (outcome.handoff) lines.push(`Handoff   ${outcome.handoff}`)
   // A read-only attempt's report is the deliverable; nothing else carries it back.
   if (result.status === 'VERIFIED' && !outcome.files?.length && result.winner?.summary) lines.push('', 'Report', '', result.winner.summary)
