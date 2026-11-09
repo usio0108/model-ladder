@@ -4,7 +4,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { Background, Row } from './types'
 import { roundSpan } from './remaining.mjs'
 import { formatContext } from './context.mjs'
-import { activityText, addBackground, medianDuration, recordDuration, addRow, agentExpected, agentSamples, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount } from './rows.mjs'
+import { activityText, addBackground, isWaitingAnswer, markAnswered, medianDuration, recordDuration, addRow, agentExpected, agentSamples, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount } from './rows.mjs'
 import { GUARD_DEFAULT, mergeConfig, parseThreshold, pluginLayer, projectPins, projectSkills, setGuard, userConfigPath } from '../config-layers.mjs'
 
 const rows = atom({ plugin: 'model-ladder', key: 'rows' } as const, [])
@@ -151,11 +151,12 @@ const agentExpectedMs = (locks: Lock[], tasks: Map<string, string>, r: Row) =>
 
 // Records one background launch from its tool result; the band only watches, so a failure here is swallowed.
 // key: what its past durations are stored under (a shell command's first line), so a repeat has an expected duration.
-const track = async ($: EngineInterface, kind: Background['kind'], id: unknown, label: unknown, key?: unknown) => {
+// question: the user question it belongs to (rows.mjs backgroundRows).
+const track = async ($: EngineInterface, question: number, kind: Background['kind'], id: unknown, label: unknown, key?: unknown) => {
   try {
     if (typeof id !== 'string' || !id) return
     const firstLine = (v: unknown) => String(v ?? '').trim().split('\n')[0].trim()
-    const task: Background = { id, kind, label: firstLine(label), startedAt: await $.clock.now(), ...(firstLine(key) && { key: firstLine(key) }) }
+    const task: Background = { id, kind, label: firstLine(label), startedAt: await $.clock.now(), question, answered: false, ...(firstLine(key) && { key: firstLine(key) }) }
     await update($, background, (l) => addBackground(l, task))
   } catch { /* bookkeeping only */ }
 }
@@ -237,6 +238,9 @@ export const register: Register = (on, options) => {
   let lastContext = ''
   // Redraws once a second while background rows show, so their elapsed time moves.
   let bgTick: Timer | null = null
+  // The user question being worked on: bumped by each user prompt (never by a task-notification), set back to a task's
+  // question when its notification wakes the session.
+  let question = 0
 
   // Records the subscription usage where preflight and the verifier read it, so the usage guard needs no statusline.
   // It runs with the band hidden too: the guard depends on it, not on the drawing. At the guard's threshold it also
@@ -281,14 +285,14 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
     if (e.agentId) return ran
-    await track($, 'shell', ran.result?.backgroundTaskId, e.description || e.command, e.command)
+    await track($, question, 'shell', ran.result?.backgroundTaskId, e.description || e.command, e.command)
     return ran
   })
   on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
     const ran = await next(e)
     // The ladder's own launch gets no row: the person already knows model-ladder is choosing a model.
     if (e.agentId || e.workflow === 'ladder' || ran.result?.workflowName === 'ladder') return ran
-    await track($, 'workflow', ran.result?.taskId, ran.result?.workflowName || e.description)
+    await track($, question, 'workflow', ran.result?.taskId, ran.result?.workflowName || e.description)
     return ran
   })
 
@@ -307,13 +311,23 @@ export const register: Register = (on, options) => {
         const ids = [...e.text.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)].map((m) => m[1].trim())
         // A command that ran to its end adds its duration to that command's history; a stopped one (TaskStop) does not.
         const now = await $.clock.now()
-        const ended = (await read($, background)).filter((t) => ids.includes(t.id) && t.key)
+        const hit = (await read($, background)).filter((t) => ids.includes(t.id))
+        // The notification wakes Claude for the question that started those tasks: its other tasks show again until that turn ends.
+        const woken = hit.find((t) => t.question !== undefined)?.question
+        if (woken !== undefined) {
+          question = woken
+          await update($, background, (l) => markAnswered(l, woken, false))
+        }
+        const ended = hit.filter((t) => t.key)
         if (ids.length) await update($, background, (l) => removeBackground(l, ids))
         if (ended.length) {
           let history = ((await $.store.get(DURATIONS)) ?? {}) as Record<string, number[]>
           for (const t of ended) history = recordDuration(history, t.key, now - t.startedAt)
           await $.store.set(DURATIONS, history)
         }
+      } else {
+        // A new user question; tasks of earlier questions keep their own state.
+        question += 1
       }
     } catch { /* bookkeeping only */ }
     return next(e)
@@ -322,7 +336,7 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
     // A background subagent the main session spawned itself (not a ladder agent) is a background row until it ends.
-    if (!e.workflow && e.background && result.agentId) await track($, 'agent', result.agentId, e.description)
+    if (!e.workflow && e.background && result.agentId) await track($, question, 'agent', result.agentId, e.description)
     if (!e.workflow || !e.subagentType.startsWith('model-ladder:') || !result.agentId) return result
     const hasTask = /TASK[^\n]*\n\s*[^\n]+/.test(e.prompt)
     if (hasTask) tasks.set(e.workflow.runId, taskOf(e.prompt, ''))
@@ -371,6 +385,12 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) await update($, background, (l) => removeBackground(l, [e.agentId!]))
+    else {
+      // The main session's turn ended: if its last reply is a final answer (not waiting), this question's tasks hide.
+      const answered = !isWaitingAnswer((e as { answer?: unknown }).answer)
+      const turnQuestion = question
+      await update($, background, (l) => markAnswered(l, turnQuestion, answered)).catch(() => undefined)
+    }
     const finished = e.agentId ? (await read($, rows)).find((r) => r.id === e.agentId) : undefined
     if (e.agentId && finished) {
       const id = e.agentId

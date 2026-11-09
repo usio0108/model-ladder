@@ -10,7 +10,7 @@ import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 
 import { join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { canonical } from '../hooks/guard.mjs'
-import { artifactDir, git, print, repoRoot, runDir, samePath, tryGit, worktrees } from './common.mjs'
+import { artifactDir, git, print, pruneLeftoverBranches, removeWorktree, repoRoot, runDir, samePath, tryGit, worktrees } from './common.mjs'
 import { readLocks, releaseLock, withMutex } from './runs.mjs'
 import { updateNote } from './update-check.mjs'
 import { claudeGuard, forceStopRuns } from './usage-guard.mjs'
@@ -68,9 +68,9 @@ function cleanup(root, state, keep, known, runId, keepOrphans = false) {
     if (!mine && !orphan) continue
     if (!mine && keepOrphans) { orphans.push(wt.path); continue }
     // Claude Code locks the worktrees it creates; removing a locked one takes --force twice.
-    tryGit(root, 'worktree', 'remove', '--force', '--force', wt.path)
-    if (wt.branch) tryGit(root, 'branch', '-D', wt.branch)
+    removeWorktree(root, wt.path, { branch: wt.branch ?? undefined })
   }
+  pruneLeftoverBranches(root)
   return orphans
 }
 

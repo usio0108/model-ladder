@@ -312,6 +312,8 @@ test('usage percentages are colored by level, not bold: plain under 50, yellow t
   }
 })
 
+// Background task id per command, for tests that run several background commands (default bg-1).
+const bgIds: Record<string, string> = { 'npm run second': 'bg-2', 'job two': 'bg-2' }
 // Background rows: one per in-flight background task, only while Claude is not working and no ladder agent runs.
 const mountBackground = async ($: any, on: any, workflowName = 'ladder') => {
   const clock = mock.clock(on, { now: 1_700_000_000_000 })
@@ -320,7 +322,7 @@ const mountBackground = async ($: any, on: any, workflowName = 'ladder') => {
   on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
   on('session.usage', () => ({ value: { rateLimits: [] } }))
   on('fs.exists', ($: any, e: any) => ({ value: slash(e.path) === '/repos/app/.git' }))
-  on('tool.call', { tool: 'Bash' }, ($: any, e: any) => ({ result: e.run_in_background ? { backgroundTaskId: 'bg-1' } : { stdout: 'ok' } }))
+  on('tool.call', { tool: 'Bash' }, ($: any, e: any) => ({ result: e.run_in_background ? { backgroundTaskId: bgIds[e.command] ?? 'bg-1' } : { stdout: 'ok' } }))
   on('tool.call', { tool: 'Workflow' }, () => ({ result: { status: 'async_launched', taskId: 'wf-1', workflowName } }))
   on('prompt.submit', ($: any, e: any) => ({ text: e.text }))
   on('agent.spawn', ($: any, e: any) => ({ agentId: `${e.workflow?.runId}:${e.description}`, model: 'claude-haiku-5-5' }))
@@ -420,6 +422,56 @@ test('a background subagent of the main session shows as an agent row until its 
   await $.turn.complete({ agentId: 'undefined:Verify member reorder only', durationMs: 5000, answer: '' })
   ui = await mount(false)
   expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('background rows follow their question: a final answer hides them, a waiting reply and a new question do not', async ($, on) => {
+  const { mount } = await mountBackground($, on)
+  on('turn.complete', () => ({ text: '' }))
+  const shows = async (text: string) => {
+    const ui = await mount(false)
+    const found = await ui.find({ type: 'Text', text })
+    await ui.unmount()
+    return found !== undefined
+  }
+  const turn = (answer: string) => $.turn.complete({ durationMs: 1000, answer })
+  // Question 1 starts a shell task and Claude replies that it is waiting: still shown.
+  await $.prompt.submit({ text: 'run the watcher' })
+  await $.tool.call({ tool: 'Bash', command: 'npm run watch', run_in_background: true })
+  await turn('Started it in the background, waiting for the result.')
+  expect(await shows('shell: npm run watch')).toBe(true)
+  // A new question does not hide it.
+  await $.prompt.submit({ text: 'something else' })
+  expect(await shows('shell: npm run watch')).toBe(true)
+  // Question 2 ends with a plain final answer: question 1 is still unfinished, so its task keeps showing.
+  await turn('Here is the other answer.')
+  expect(await shows('shell: npm run watch')).toBe(true)
+  // Question 3 starts its own task and ends with a final answer: that task hides, question 1's still shows.
+  await $.prompt.submit({ text: 'third question' })
+  await $.tool.call({ tool: 'Bash', command: 'npm run second', run_in_background: true })
+  await turn('All done, nothing left to do.')
+  expect(await shows('shell: npm run second')).toBe(false)
+  expect(await shows('shell: npm run watch')).toBe(true)
+  // Hidden but tracked: its notification removes it, and a later look shows nothing.
+  await notify($, ['bg-2'])
+  expect(await shows('shell: npm run second')).toBe(false)
+  expect(await shows('shell: npm run watch')).toBe(true)
+})
+
+test('a task-notification is not a new question and brings its question tasks back until that turn ends', async ($, on) => {
+  const { mount } = await mountBackground($, on)
+  on('turn.complete', () => ({ text: '' }))
+  await $.prompt.submit({ text: 'two jobs' })
+  await $.tool.call({ tool: 'Bash', command: 'job one', run_in_background: true })
+  await $.tool.call({ tool: 'Bash', command: 'job two', run_in_background: true })
+  await $.turn.complete({ durationMs: 1, answer: 'Finished. Summary above.' })
+  let ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'background' })).toBeUndefined()
+  await ui.unmount()
+  // job one ends; its notification wakes Claude on the same question, so job two shows again (not working view).
+  await notify($, ['bg-1'])
+  ui = await mount(false)
+  expect(await ui.find({ type: 'Text', text: 'shell: job two' })).toBeDefined()
   await ui.unmount()
 })
 

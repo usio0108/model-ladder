@@ -55,6 +55,33 @@ export function worktrees(root) {
   return list
 }
 
+// The one way to remove a worktree. Claude Code locks the worktrees it creates, so removal takes
+// --force twice. A Windows file-in-use failure is retried briefly; if the folder is still held the
+// worktree stays registered and a later pruneRuns or finish retries it (this never throws or blocks).
+// Afterwards it prunes and deletes the worktree's branch (given, or the one it had) when it is a
+// worktree-wf_* leftover or `branch` was passed explicitly.
+export function removeWorktree(root, path, { branch, retries = 3 } = {}) {
+  const known = worktrees(root).find((w) => samePath(w.path, path))
+  const name = branch ?? known?.branch ?? null
+  let result = { ok: false, out: '' }
+  for (let i = 0; i <= retries; i++) {
+    result = tryGit(root, 'worktree', 'remove', '--force', '--force', path)
+    if (result.ok || !worktrees(root).some((w) => samePath(w.path, path))) { result.ok = true; break }
+    if (i < retries) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200 * (i + 1))
+  }
+  tryGit(root, 'worktree', 'prune')
+  if (result.ok && name && (branch || /^worktree-wf_/.test(name))) tryGit(root, 'branch', '-D', name)
+  return result
+}
+
+// Deletes worktree-wf_* branches that no worktree has checked out any more.
+export function pruneLeftoverBranches(root) {
+  const held = new Set(worktrees(root).map((w) => w.branch))
+  const listed = tryGit(root, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/worktree-wf_*')
+  if (!listed.ok) return
+  for (const name of listed.out.split('\n').filter(Boolean)) if (!held.has(name)) tryGit(root, 'branch', '-D', name)
+}
+
 // Called once a new run holds its lock. Other runs may be active, so it never touches a run dir an
 // active lock names (its own runId or the run it resumes). Deletes the codex-<uuid> directories of
 // finished runs under artifactDir(root), and under the legacy <root>/.model-ladder that older versions
@@ -74,13 +101,14 @@ export function pruneRuns(root, { keepFailed = false } = {}) {
         let status
         try { status = JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8')).status } catch { continue }
         if (status === 'CONFLICT' || existsSync(join(dir, 'result.patch')) || existsSync(join(dir, 'checkpoint.json')) || keepFailed && attempts.length) continue
-        const stuck = attempts.some((file) => !tryGit(root, 'worktree', 'remove', '--force', join(dir, file)).ok && worktrees(root).some((w) => samePath(w.path, join(dir, file))))
+        const stuck = attempts.some((file) => !removeWorktree(root, join(dir, file)).ok && worktrees(root).some((w) => samePath(w.path, join(dir, file))))
         if (stuck) continue
         rmSync(dir, { recursive: true, force: true })
         removed.push(name)
       }
     }
     tryGit(root, 'worktree', 'prune')
+    pruneLeftoverBranches(root)
   } catch {}
   return removed
 }

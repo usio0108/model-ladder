@@ -5,6 +5,34 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { applyResult, changed, git, makeWorktree, protectedChange, snapshot } from '../../scripts/codex-worktree.mjs'
+import { pruneLeftoverBranches, removeWorktree } from '../../scripts/common.mjs'
+
+test('removeWorktree removes a locked worktree, prunes it and deletes its worktree-wf_* branch', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ml-locked-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  git(root, 'init', '-q')
+  git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
+  const wt = join(root, '.claude', 'worktrees', 'wf_x')
+  git(root, 'worktree', 'add', '-q', wt, '-b', 'worktree-wf_x')
+  git(root, 'worktree', 'lock', '--reason', 'claude agent', wt)
+  assert.throws(() => git(root, 'worktree', 'remove', '--force', wt), 'a single --force cannot remove a locked worktree')
+  assert.equal(removeWorktree(root, wt).ok, true)
+  assert.equal(existsSync(wt), false)
+  assert.ok(!git(root, 'worktree', 'list').includes('wf_x'), 'worktree unregistered')
+  assert.equal(git(root, 'branch', '--list', 'worktree-wf_x'), '', 'branch deleted')
+})
+
+test('pruneLeftoverBranches deletes worktree-wf_* branches without a worktree and keeps the rest', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'ml-leftover-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  git(root, 'init', '-q')
+  git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
+  git(root, 'branch', 'worktree-wf_old')
+  git(root, 'branch', 'feature')
+  pruneLeftoverBranches(root)
+  assert.equal(git(root, 'branch', '--list', 'worktree-wf_old'), '')
+  assert.match(git(root, 'branch', '--list', 'feature'), /feature/)
+})
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'ml-artifacts-'))

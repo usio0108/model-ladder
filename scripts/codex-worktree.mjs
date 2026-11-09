@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isProtected } from '../hooks/guard.mjs'
+import { removeWorktree } from './common.mjs'
 import { ARTIFACTS } from './ladder-rules.mjs'
 import { withMutex } from './runs.mjs'
 
@@ -32,7 +33,7 @@ export function makeWorktree(root, run, number, baseCommit, baseTree) {
   const cwd = join(run, `attempt-${number}`)
   git(root, 'worktree', 'add', '--detach', '-q', cwd, baseCommit)
   try { git(cwd, 'read-tree', '--reset', '-u', baseTree) }
-  catch (error) { git(root, 'worktree', 'remove', '--force', cwd); throw error }
+  catch (error) { removeWorktree(root, cwd); throw error }
   return cwd
 }
 // Concurrent runs apply one at a time (the 'apply' mutex). A patch that no longer applies, for example
@@ -73,8 +74,8 @@ export function removeOwned(root, paths, keep = []) {
   const errors = []
   for (const cwd of paths) {
     if (keep.includes(cwd)) continue
-    try { git(root, 'worktree', 'remove', '--force', cwd) }
-    catch (error) { errors.push(`Worktree retained at ${cwd}: ${String(error.stderr ?? error.message).slice(-500)}`) }
+    const result = removeWorktree(root, cwd)
+    if (!result.ok) errors.push(`Worktree retained at ${cwd} (a later cleanup retries it): ${result.out.slice(-500)}`)
   }
   return errors
 }

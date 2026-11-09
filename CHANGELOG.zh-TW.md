@@ -4,6 +4,13 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [Unreleased]
+
+- 所有移除 worktree 的地方（finish 清理、run 修剪、Codex attempt worktree）統一走同一個 helper：用 `--force --force` 移除被鎖住的 worktree、執行 prune，並刪除殘留的 `worktree-wf_*` 分支；先前 run 留下的殘留分支也會一併清掉。
+- 因 Windows 檔案佔用而移除失敗時，會短暫重試，仍失敗就保留登記、不阻擋 run，下次 run 的修剪會再試一次。
+- Claude Code band 的 `background` 列現在只顯示「所屬問題還沒結束」的背景任務。每個背景任務（shell、workflow、agent）會記下啟動時的使用者問題；task-notification 不算新問題，新問題也不會隱藏舊問題的任務。主 session 的那一輪以最終回答結束、且不是在等該任務時，該問題的任務會隱藏但仍持續追蹤，結束通知來時照常移除並記錄 duration；notification 喚醒 session 時，該問題剩下的任務會再次顯示。限制：plugin runtime 的 `turn.complete` 只給回覆文字（`answer`），沒有「等待中」旗標，因此回覆為空、或提到等待、背景、通知（中英文關鍵字）就視為在等；不確定時顯示。最終回答若剛好用了這些字，任務列會繼續顯示；用其他說法表達的等待則會被隱藏。Claude 正在跑 turn 或 ladder agent 在跑時仍不顯示。
+- 修正原本就失敗的 `skill instructions are plugin options` 測試：它要求 `pluginLayer(options)` 字面相符，但 band 實際寫的是 `pluginLayer(options as any)`。
+
 ## [1.1.5] - 2026-11-06
 
 - Claude Code 的 usage guard 現在會自動交接：5 小時或 7 天用量視窗達到門檻時，Band 寫入交接模板並執行 `/model-ladder:handoff`，讓主 session 寫出 AI 版。每個視窗只觸發一次（重新載入或開新 session 也不重複），視窗降回門檻以下或重設後才會再觸發。沒有 ladder run 時也會交接，因為 handoff skill 依據對話內容撰寫。

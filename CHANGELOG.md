@@ -4,6 +4,13 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [Unreleased]
+
+- Every worktree removal (finish cleanup, run pruning, Codex attempt worktrees) now goes through one helper that removes locked worktrees with `--force --force`, prunes, and deletes the leftover `worktree-wf_*` branch. Branches left behind by earlier runs are swept too.
+- A removal that fails because Windows has a file in use is retried briefly, then left registered without blocking the run; the next run's pruning retries it.
+- The Claude Code band's `background` rows now show only tasks whose user question is still unfinished. Each background task (shell, workflow, agent) records the question it started under; a task-notification is not a new question, and a new question does not hide an earlier question's tasks. When the main session's turn ends with a final answer that is not waiting on the task, that question's tasks hide but stay tracked, so the end notification still removes them and records the duration; a notification waking the session shows that question's remaining tasks again. Limit: the plugin runtime gives `turn.complete` only the reply text (`answer`), no "waiting" flag, so a reply counts as waiting when it is empty or mentions waiting, the background or a notification (English or Chinese keywords). Uncertain replies show the row; a final answer using those words keeps its rows visible, and a wait phrased in other words is hidden. Still hidden while Claude runs a turn or a ladder agent runs.
+- Fixed the failing `skill instructions are plugin options` test, which required `pluginLayer(options)` verbatim while the band calls `pluginLayer(options as any)`.
+
 ## [1.1.5] - 2026-11-06
 
 - The usage guard now hands off on its own in Claude Code: when the five-hour or seven-day window reaches the threshold, the band writes the handoff template and runs `/model-ladder:handoff` so the main session writes the AI version. It does this once per window, persisted across reloads and new sessions, and again only after the window drops below the threshold or resets. It hands off even with no ladder run, since the handoff skill writes from the conversation.

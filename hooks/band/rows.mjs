@@ -20,8 +20,22 @@ export const addBackground = (list, task) => (list.some((t) => t.id === task.id)
 
 export const removeBackground = (list, ids) => list.filter((t) => !ids.includes(t.id))
 
-// They show only for work the screen does not otherwise show: not while the main session runs a turn, and not while a ladder agent runs.
-export const backgroundRows = (list, isWorking, anyAgentRunning) => (isWorking || anyAgentRunning ? [] : list)
+// Each task also records the user question it belongs to ({ question, answered }); a task-notification is not a question.
+// A task is hidden (answered: true) once its question's turn gave a final answer that is not waiting for its result; it
+// stays in the list, so its end notification still removes it and records its duration.
+// Heuristic and limits: the plugin runtime gives turn.complete only the turn's last reply text (answer), with no flag for
+// "Claude is waiting on a task". So a reply counts as waiting when it is empty or unreadable, or mentions waiting, a
+// background run or a later notification (English or Chinese keywords below). Anything uncertain is shown. A final answer
+// that happens to use those words keeps its rows visible until the task ends; a wait phrased in other words is hidden.
+const WAITING = /wait|pending|in progress|in the background|background|still running|running|notif|will (let you know|report|check|get back)|once (it|they) (finish|complete)|等|稍後|稍后|背景|後台|后台|通知|進行中|进行中|執行中|执行中|完成後|完成后/i
+export const isWaitingAnswer = (answer) => typeof answer !== 'string' || !answer.trim() || WAITING.test(answer)
+
+// Sets answered on every task of one question.
+export const markAnswered = (list, question, answered) => list.map((t) => (t.question === question && Boolean(t.answered) !== answered ? { ...t, answered } : t))
+
+// They show only for work the screen does not otherwise show: not while the main session runs a turn, and not while a
+// ladder agent runs; and not for a task whose question already has its final answer.
+export const backgroundRows = (list, isWorking, anyAgentRunning) => (isWorking || anyAgentRunning ? [] : list.filter((t) => !t.answered))
 
 // Only these agents show an expected duration; router, diagnose and final-diagnosis rows show elapsed only.
 export const EXPECTED_PHASES = ['worker', 'test-writer', 'verify']
