@@ -6,6 +6,7 @@ import { roundSpan } from './remaining.mjs'
 import { formatContext } from './context.mjs'
 import { activityText, addBackground, isWaitingAnswer, markAnswered, medianDuration, recordDuration, addRow, agentExpected, agentSamples, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount } from './rows.mjs'
 import { GUARD_DEFAULT, mergeConfig, parseThreshold, pluginLayer, projectPins, projectSkills, setGuard, userConfigPath } from '../config-layers.mjs'
+import { displayWidth, panelTitle } from '../../scripts/panel-title.mjs'
 
 const rows = atom({ plugin: 'model-ladder', key: 'rows' } as const, [])
 // In-flight background tasks of this session (Bash background calls, async Workflow launches), shown while nothing else is.
@@ -30,6 +31,11 @@ const userPath = async ($: EngineInterface) => userConfigPath('claude', {
 }, (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '~')
 async function readJson($: EngineInterface, path: string): Promise<Config> {
   try { return JSON.parse(await $.fs.read(path)) } catch { return {} }
+}
+async function installedTitle($: EngineInterface) {
+  const root = await $.env.get('CLAUDE_PLUGIN_ROOT')
+  if (!root) return 'model-ladder'
+  try { return panelTitle(await $.fs.read(`${root}/.claude-plugin/plugin.json`)) } catch { return 'model-ladder' }
 }
 async function editUserConfig($: EngineInterface, edit: (c: Config) => Config) {
   const path = await userPath($)
@@ -446,6 +452,7 @@ export const register: Register = (on, options) => {
     const folded = await read($, isFolded)
     const fold = <Button key="fold" plain dimColor label={folded ? '▾' : '▴'} onPress={() => update($, isFolded, (v) => !v)} />
     const last = running.at(-1)
+    const fullTitle = await installedTitle($)
     const runs = runCount(shown)
     // With 2+ runs each row says which run it belongs to, by that run's task.
     const tag = (r: Row) => (runs > 1 ? `${fit(tasks.get(r.run) ?? '', 20).trim()} ` : '')
@@ -463,6 +470,9 @@ export const register: Register = (on, options) => {
     }
     const bgTask = (t: Background) => `${t.kind}: ${t.label}`
     const idle = running.length || bg.length ? '' : ' · idle'
+    // The header keeps usage whole: the version goes first when fold, dot, title, usage and suffix overflow the body.
+    const header = (name: string) => 1 + (last ? 3 : 0) + displayWidth(` ${name} ── ${usageLine || 'usage unknown'}`) + displayWidth(folded ? (last ? ' · ' : '') : idle)
+    const title = header(fullTitle) > (e.props.bodyColumns ?? 60) ? 'model-ladder' : fullTitle
 
     const { project, repoRoot, config } = await loadConfig($, options)
     const guard = config.usageGuard ?? {}
@@ -481,7 +491,7 @@ export const register: Register = (on, options) => {
         <Box>
           {fold}
           {dot}
-          <Text bold> model-ladder </Text>
+          <Text bold> {title} </Text>
           {usageRun(`── ${usageLine || 'usage unknown'}${last ? ' · ' : ''}`)}
           {last && runs > 1 && <Text dimColor>{runs} runs · </Text>}
           {last && <Text>{last.cell} · {elapsed(last)} · {fit(rowTask(last), 30).trim()}</Text>}
@@ -528,7 +538,7 @@ export const register: Register = (on, options) => {
         <Box>
           {fold}
           {dot}
-          <Text bold> model-ladder </Text>
+          <Text bold> {title} </Text>
           {usageRun(`── ${usageLine || 'usage unknown'}${idle}`)}
         </Box>
         {withs.length > 0 && (

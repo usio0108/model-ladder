@@ -54,6 +54,23 @@ function fixture(t) {
   return { root, worker, run, base, commit, write, result: () => snapshot(worker, run, 'result') }
 }
 
+test('worktree creation retries one transient failure without advancing the attempt', (t) => {
+  const f = fixture(t)
+  let calls = 0, waits = 0
+  const runGit = (cwd, ...args) => {
+    if (args[0] === 'worktree' && ++calls === 1) throw Object.assign(new Error('git failed'), { stderr: 'Resource temporarily unavailable' })
+    return git(cwd, ...args)
+  }
+  const worker = makeWorktree(f.root, f.run, 2, f.commit, f.base, { runGit, wait: () => { waits++ } })
+  assert.equal(calls, 2)
+  assert.equal(waits, 1)
+  assert.equal(git(worker, 'rev-parse', 'HEAD'), f.commit)
+  git(f.root, 'worktree', 'remove', '--force', worker)
+  let failures = 0
+  assert.throws(() => makeWorktree(f.root, f.run, 3, f.commit, f.base, { runGit: () => { failures++; throw new Error('invalid revision') }, wait: () => {} }), /invalid revision/)
+  assert.equal(failures, 1)
+})
+
 test('tracked artifact edits and deletions are checked, protected and applied', (t) => {
   const f = fixture(t)
   f.write(f.worker, 'dist/source.js', 'updated\n')

@@ -64,6 +64,8 @@ Claude 產生 `.claude/skills/verify/`；Codex 產生 `.agents/skills/verify/`�
 
 Panel 可跨任務重用，無法顯示終端時改看 tool output 的進度。
 HUD 必須先啟動 Codex，不能附加到已開啟的 session。Windows 上由 Codex 的 SessionStart hook 自動設定：在 PowerShell profile（PowerShell 7 與 Windows PowerShell）加入有標記的 `codex` 函式，之後開新的 PowerShell 視窗輸入 `codex` 就會進入 HUD。`exec`、`login` 等子指令、輸入或輸出被導向、缺少 `node-pty` 或 Node.js 時，直接執行原生 `codex.exe`；`node-pty` 第一次會在背景安裝。在 `~/.codex/model-ladder.json` 設定 `"hudTakeover": false` 即可移除該函式。
+
+在 CLI HUD 按 Ctrl+]，若有 run 資料就會寫入交接模板，並提示以 `$handoff` 補上對話內容。HUD 預設佔用終端兩列；按 Ctrl+\ 可展開顯示所有 agent、skills 與用量守門（最多佔終端高度一半），再按一次收合。
 Windows 需使用 PATH 或 `CODEX_BINARY` 指定的原生 `codex.exe`，不接受 `.cmd`、`.bat`。
 
 ## 並行執行
@@ -158,7 +160,7 @@ Claude 外掛角色指示作為預設，專案同名鍵可覆蓋，空字串也�
 | 細節 | 行為 |
 |---|---|
 | Context | Claude 顯示 `ctx 287k/1M (28.7%)`，token 未知時只顯示上限，上限未知則不顯示。 |
-| Codex context | 沒有自動資料來源，不可杜撰數值來啟用 DIRECT。 |
+| Codex context | runner 只讀取符合目前 session ID 與 cwd 的 rollout token 數；HUD 使用受信任的 SessionStart hook 提供的 ID。無法對應時省略，不可杜撰數值。 |
 | 保護控制 | 只儲存修改的個人設定欄位，專案覆寫仍有效。 |
 | 門檻 | 按 Enter 或停止輸入 5 秒後儲存，不會改變保護開關。 |
 | 角色指示 | 只顯示符合專案與全域的規則且不加前綴，Band 預設預覽一行，點箭頭可展開或收合。 |
@@ -169,6 +171,7 @@ Claude 外掛角色指示作為預設，專案同名鍵可覆蓋，空字串也�
 
 手動交接不會取消 run。
 Codex 沒有 autorun 或 panel 時，確認外掛已啟用、重新啟動 session，並在 `/hooks` 檢閱與信任 hooks。
+Hook 信任適用於目前的定義與內容：更新後請在 Codex CLI 開啟 `/hooks`，若 model-ladder 的 SessionStart hook 顯示已修改，請檢閱並重新信任，再開啟新 session。Codex 會略過未信任或已修改的 hook；手動執行腳本不會建立信任。詳見 [OpenAI hook 文件](https://learn.chatgpt.com/docs/hooks)。
 明確呼叫 ladder skill 也會初始化 panel，不會安裝 editor UI extension。
 
 ## 使用量保護細節

@@ -36,8 +36,10 @@ if (scenario.environment === phase && scenario.limitEvent) {
 if (scenario.environment === phase) { console.error(scenario.environmentMessage ?? 'model unsupported or sandbox permission denied'); process.exit(1) }
 if (scenario.warning) console.error('sandbox initialized normally')
 let output
-if (phase === 'route') output = {model:scenario.invalidStart ? 'no-model' : 'cheap',effort:'low',reason:'small task',goal:'Fix greeting',scope:['greeting.mjs'],allowTests:scenario.allowTests ?? false,readOnly:scenario.readOnly ?? false,question:scenario.question ?? null,estimatedMinutes:scenario.estimatedMinutes ?? 5,optimisticMinutes:scenario.optimisticMinutes ?? scenario.estimatedMinutes ?? 5,pessimisticMinutes:scenario.pessimisticMinutes ?? scenario.estimatedMinutes ?? 5,workerMinutes:scenario.workerMinutes ?? 2,verifyMinutes:scenario.verifyMinutes ?? 1}
+if (phase === 'route') output = {model:scenario.invalidStart ? 'no-model' : 'cheap',effort:'low',reason:'small task',goal:'Fix greeting',scope:['greeting.mjs'],allowTests:scenario.allowTests ?? false,readOnly:scenario.routerReadOnly ?? scenario.readOnly ?? false,question:scenario.question ?? null,estimatedMinutes:scenario.estimatedMinutes ?? 5,optimisticMinutes:scenario.optimisticMinutes ?? scenario.estimatedMinutes ?? 5,pessimisticMinutes:scenario.pessimisticMinutes ?? scenario.estimatedMinutes ?? 5,workerMinutes:scenario.workerMinutes ?? 2,verifyMinutes:scenario.verifyMinutes ?? 1}
+if (phase === 'route' && schema.properties.small) Object.assign(output, { small: true, smallReason: 'Small fixture task' })
 if (phase === 'worker') {
+  if (scenario.activity) process.stdout.write(`${JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: scenario.activity } })}\n`)
   for (const [file, value] of Object.entries(scenario.expectWorkerFiles ?? {})) {
     if (number > 1) assert.equal(readFileSync(join(cwd, file), 'utf8'), value)
   }
@@ -61,6 +63,7 @@ if (phase === 'worker') {
     execFileSync('git',['worktree','add','--detach','-q',scenario.createUnrelated,'HEAD'],{cwd:root})
   }
   output = {status:'done',summary:scenario.readOnly ? 'Greeting comes from greeting.mjs.' : 'Fixed greeting',blockedReason:null}
+  if (schema.properties.skills) output.skills = scenario.skills ?? []
 }
 if (phase === 'verify') {
   for (const [file, value] of Object.entries(scenario.verifyFiles ?? {})) {

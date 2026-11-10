@@ -52,7 +52,7 @@ const pinned = (root, field) => projectPins(readLayers(root, 'codex').project, f
   : ''
 export function panelCommand(cwd, command) {
   const words = command.trim().split(/\s+/)
-  if (words[0] === 'h' && words.length === 1) return `Handoff: ${writeHandoff(cwd)}`
+  if (words[0] === 'h' && words.length === 1) return `Handoff: ${writeHandoff(cwd)}. Use the handoff skill in Codex to add conversation context.`
   if (words[0] === 'g' && words.length === 1) {
     const guard = configureGuard(cwd, {})
     configureGuard(cwd, { enabled: !guard.enabled })
@@ -74,8 +74,8 @@ export function watch({ cwd = process.cwd(), output = process.stdout, input = pr
     try { state = JSON.parse(readFileSync(join(cwd, '.model-ladder', 'live.json'), 'utf8')) }
     catch (error) { if (error.code !== 'ENOENT') throw error }
     const guard = configureGuard(cwd, {})
-    const frame = renderLive({ ...state, usage: readCodexUsage(undefined, undefined, { details: true, resets: true }) }, { width: output.columns ?? 80, guard })
-    output.write(`${output.isTTY ? '\x1b[H\x1b[2J' : ''}${frame}\n${input.isTTY ? 'g: guard · t 90: threshold · h: handoff · q: quit (Enter to apply)\n' + message + '\n> ' + (reader?.line ?? '') : ''}`)
+    const frame = renderLive({ ...state, usage: readCodexUsage(undefined, undefined, { details: true, resets: true }) }, { width: output.columns ?? 80, guard, color: output.isTTY })
+    output.write(`${output.isTTY ? '\x1b[H\x1b[2J' : ''}${frame}\n${input.isTTY ? 'If automatic setup is missing, review the model-ladder hook in Codex /hooks.\ng: guard · t 90: threshold · h: handoff · q: quit (Enter to apply)\n' + message + '\n> ' + (reader?.line ?? '') : ''}`)
   }
   draw()
   const timer = setInterval(() => {

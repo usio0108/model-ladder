@@ -87,6 +87,23 @@ test('Codex worker prompt carries the editing rules', async () => {
   assert.match(prompt, /\.venv, uv\.lock/)
   assert.match(prompt, /git status --porcelain --untracked-files=all/)
 })
+test('matching session token count enables the DIRECT route', async () => {
+  const dir = fixture()
+  const previous = process.env.CODEX_THREAD_ID
+  const id = 'abcdefab-1234-1234-1234-abcdefabcdef'
+  const file = join(NO_USAGE, 'sessions', `rollout-${id}.jsonl`)
+  try {
+    process.env.CODEX_THREAD_ID = id
+    mkdirSync(join(NO_USAGE, 'sessions'), { recursive: true })
+    writeFileSync(file, [JSON.stringify({ type: 'session_meta', payload: { id, cwd: dir } }), JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 70 }, model_context_window: 100 } } })].join('\n'))
+    const result = await run(dir)
+    assert.equal(result.status, 'DIRECT', JSON.stringify(result))
+    assert.deepEqual(calls(dir).map((call) => call.phase), ['route'])
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_THREAD_ID; else process.env.CODEX_THREAD_ID = previous
+    rmSync(file, { force: true })
+  }
+})
 test('historical phase medians take precedence over first-run router estimates', async () => {
   const dir = fixture({ workerMinutes: 8, verifyMinutes: 6 })
   const endedAt = Date.now() - 1000
@@ -228,17 +245,33 @@ test('vague task asks its clarifying question', async () => {
   assert.equal((await run(dir)).message, 'Which greeting?')
   cleaned(dir)
 })
+test('a read-only router result for an apparent direct edit needs confirmation before any worker runs', async () => {
+  const dir = fixture({ routerReadOnly: true })
+  const result = await run(dir, { task: '把面板標題改成顯示版本，補對應單元測試' })
+  assert.equal(result.status, 'NEEDS_INPUT', JSON.stringify(result))
+  assert.match(result.message, /read-only/)
+  assert.deepEqual(calls(dir).map((call) => call.phase), ['route'])
+  cleaned(dir)
+})
 test('read-only report does not apply or stage user edits', async () => {
   const dir = fixture({ readOnly: true })
   write(dir, 'notes.txt', 'user note\n')
   const before = git(dir, 'write-tree')
-  const result = await run(dir, { allowDirty: true })
+  const result = await run(dir, { task: 'Explain where the greeting comes from.', allowDirty: true })
   assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
   assert.match(result.summary, /Greeting comes from/)
   assert.equal(result.outcome.applied, false)
   assert.equal(git(dir, 'write-tree'), before)
   assert.equal(read(dir, 'notes.txt'), 'user note\n')
   assert.ok(calls(dir).find((c) => c.phase === 'worker').sandbox === 'read-only')
+  cleaned(dir)
+})
+test('an explicit no-edit request keeps the ordinary read-only route', async () => {
+  const dir = fixture({ readOnly: true })
+  const result = await run(dir, { task: 'Explain where the greeting comes from. Do not make any edits.' })
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  assert.equal(result.outcome.applied, false)
+  assert.equal(calls(dir).find((call) => call.phase === 'worker').sandbox, 'read-only')
   cleaned(dir)
 })
 test('patch conflict retains the verified worktree and patch without overwriting concurrent work', async () => {
@@ -431,6 +464,8 @@ test('usageGuard stops at the threshold with a handoff and releases the marker',
     const result = await run(dir)
     assert.equal(result.status, 'STOPPED', JSON.stringify(result))
     assert.equal(result.errorCode, 'USAGE_LIMIT')
+    assert.equal(result.needsAiHandoff, true)
+    assert.equal(result.handoffSkill, 'handoff')
     assert.match(result.message, /95%.*90%/)
     assert.match(readFileSync(result.handoffPath, 'utf8'), /Fix greeting typo/)
     assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
@@ -738,7 +773,7 @@ test('skill and acceptance verification can build while reports remain read-only
   cleaned(dir)
   const report = fixture({ readOnly: true }, { verify: null })
   seed(report, { '.agents/skills/verify/SKILL.md': 'Review report' })
-  assert.equal((await run(report)).status, 'VERIFIED')
+  assert.equal((await run(report, { task: 'Review the greeting implementation.' })).status, 'VERIFIED')
   assert.equal(calls(report).find((c) => c.phase === 'verify').sandbox, 'read-only')
   cleaned(report)
   const acceptance = fixture({ verifyFiles: { 'dist/check.mjs': 'build artifact' } }, { verify: null })
@@ -822,9 +857,30 @@ test('role skill instructions reach the correct role intact and appear in live s
   cleaned(dir)
 })
 
+test('available required skills skipped by a worker fail before verification', async () => {
+  const skills = [{ name: 'example', applies: true, available: true, used: false, note: 'skipped' }]
+  const dir = fixture({ skills }, { worker_skills: 'use example', maxAttempts: 1 })
+  const result = await run(dir)
+  assert.equal(result.status, 'FAILED')
+  assert.match(result.attempts[0].reason, /worker skipped required skills: example/)
+  assert.deepEqual(result.attempts[0].skills, skills)
+  assert.ok(!calls(dir).some((call) => call.phase === 'verify'))
+  assert.match(JSON.stringify(JSON.parse(read(dir, '.model-ladder/live.json'))), /example/)
+  cleaned(dir)
+})
+
+test('worker command events appear in live progress', async () => {
+  const dir = fixture({ activity: 'node --test example' })
+  const frames = []
+  const result = await run(dir, {}, { onProgress: (frame) => frames.push(frame) })
+  assert.equal(result.status, 'VERIFIED')
+  assert.equal(JSON.parse(read(dir, '.model-ladder/live.json')).agents.find((a) => a.phase === 'worker').activity, 'Command: node --test example')
+  cleaned(dir)
+})
+
 test('report-only tasks without tests use independent review without asking for criteria', async () => {
   const dir = fixture({ readOnly: true }, { verify: null })
-  const result = await run(dir)
+  const result = await run(dir, { task: 'Summarize the greeting implementation.' })
   assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
   assert.equal(result.outcome.applied, false)
   cleaned(dir)

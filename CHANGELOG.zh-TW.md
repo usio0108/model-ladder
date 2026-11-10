@@ -6,10 +6,22 @@
 
 ## [Unreleased]
 
-- 所有移除 worktree 的地方（finish 清理、run 修剪、Codex attempt worktree）統一走同一個 helper：用 `--force --force` 移除被鎖住的 worktree、執行 prune，並刪除殘留的 `worktree-wf_*` 分支；先前 run 留下的殘留分支也會一併清掉。
-- 因 Windows 檔案佔用而移除失敗時，會短暫重試，仍失敗就保留登記、不阻擋 run，下次 run 的修剪會再試一次。
-- Claude Code band 的 `background` 列現在只顯示「所屬問題還沒結束」的背景任務。每個背景任務（shell、workflow、agent）會記下啟動時的使用者問題；task-notification 不算新問題，新問題也不會隱藏舊問題的任務。主 session 的那一輪以最終回答結束、且不是在等該任務時，該問題的任務會隱藏但仍持續追蹤，結束通知來時照常移除並記錄 duration；notification 喚醒 session 時，該問題剩下的任務會再次顯示。限制：plugin runtime 的 `turn.complete` 只給回覆文字（`answer`），沒有「等待中」旗標，因此回覆為空、或提到等待、背景、通知（中英文關鍵字）就視為在等；不確定時顯示。最終回答若剛好用了這些字，任務列會繼續顯示；用其他說法表達的等待則會被隱藏。Claude 正在跑 turn 或 ladder agent 在跑時仍不顯示。
-- 修正原本就失敗的 `skill instructions are plugin options` 測試：它要求 `pluginLayer(options)` 字面相符，但 band 實際寫的是 `pluginLayer(options as any)`。
+## [1.2.0] - 2026-11-10
+
+Codex 在面板、用量交接、skills 與安全檢查上補齊到與 Claude Code 端一致。
+
+- **Codex CLI HUD**：顯示外掛版本、目前用量與重置倒數、保護狀態、context（`ctx 52k/258k (20.2%)`），以及執行中 agent 的經過／預估時間，格式與 Claude band 相同（顯示 `12m`，不再是 `720s`）。按 Ctrl+\ 展開成所有 agent、skills 與用量保護（最多佔終端高度一半），再按一次收合回兩列。終端較窄時依序先省略 context、版本、按鍵提示，兩個用量百分比一定完整顯示。
+- **Codex 用量交接**：信任 SessionStart hook 後，CLI HUD 會在每個已知用量視窗排入一次固定的交接指示；其他介面在 SessionStart 時收到提醒。Codex 新增 `handoff` skill，用量停止時會提示 session 撰寫 AI 交接；達到硬上限時仍保留程式產生的範本。
+- **Codex worker skills 強制檢查**：worker 須逐項回報設定的能力，適用且可用卻未使用時，該次嘗試在驗證前即判失敗。此回報由模型自行聲明。
+- **Codex router 安全檢查**：看起來是修改的任務被判成唯讀時，會在任何 worker 執行前以 `NEEDS_INPUT` 停下確認，不再誤報「沒改東西就成功」，也不會自行改成可寫入。任務中有明確的不修改指示（例如「別動任何檔案」、「不修改」、"do not modify"）時，即使含有修改字眼也維持唯讀。
+- Codex 與 Claude 面板標題顯示各自封裝外掛的版本（`model-ladder (v1.2.0)`），窄版會先省略版本以保留用量；Claude band 改為依整列標題實際寬度判斷。
+- Codex DIRECT 與 CLI HUD 只從 session ID 和 cwd 相符的 rollout 讀取 token 數。Codex agent 超過預估時間時，若 exec 事件流提供指令，會顯示最近的指令。
+- 缺少 `node-pty` 時，HUD 改啟動一般 `codex`，且不再把 HUD 自己的環境變數傳下去。
+- Codex 建立 worktree 遇到暫時性錯誤時會重試一次，再回報錯誤。
+- **Worktree 清理**：所有移除 worktree 的地方（finish、run 修剪、Codex attempt）統一走同一個 helper：用 `--force --force` 移除被鎖住的 worktree、執行 prune，並刪除殘留的 `worktree-wf_*` 分支；先前 run 留下的分支也會一併清掉。因 Windows 檔案佔用而移除失敗時會短暫重試，仍失敗就留給下次 run 的修剪處理，不阻擋目前的 run。
+- **Claude band 背景列**只顯示「所屬問題還沒結束」的任務。最終回答且不是在等某任務時，該問題的任務會隱藏（仍持續追蹤，結束通知照常移除並記錄 duration）；新問題不會隱藏舊問題的任務。限制：`turn.complete` 只給回覆文字，因此回覆為空、或提到等待、背景、通知（中英文關鍵字）就視為在等。
+- README 補上 Codex 外掛的更新步驟：更新 marketplace、重新加入外掛、在 `/hooks` 重新信任已修改的 SessionStart hook、開新 session，`node-pty` 安裝完成後開新的 PowerShell 視窗。
+- 已知限制：Codex 尚未追蹤背景工作，watcher 的交接仍須手動觸發。
 
 ## [1.1.5] - 2026-11-06
 

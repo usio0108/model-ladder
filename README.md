@@ -30,7 +30,7 @@ model-ladder is a [Claude Code](https://code.claude.com) and Codex plugin. The R
 - **Protected tests**: workers cannot modify tests unless the task explicitly asks for test changes.
 - **Usage protection**: a detected usage stop ends the current run and force-stops other registered runs on the machine, with Codex checking every 2 seconds during execution.
 - **Handoff document**: usage stops or `/model-ladder:handoff` create `.model-ladder/HANDOFF.md`, which the main session rewrites from the conversation while preserving the program-generated verification appendix.
-- **The band / panel / HUD**: view active roles, usage, and guard controls in the Claude band or Codex terminal displays, with Claude also showing context tokens and percentage.
+- **The band / panel / HUD**: view active roles, usage, and guard controls in the Claude band or Codex terminal displays; the CLI HUD also shows context when its session can be identified.
 - **Custom role instructions**: `worker_skills` and `verifier_skills` select available skills and tools within each role's permissions, while the Claude Router has only Read, Grep, and Glob.
 - **Codex timeout recovery**: `TIMEOUT` results with a checkpoint support `resumeRun` to continue the draft and verify it before application.
 - **Optional Codex commits**: `commit: true` commits verified files while preserving unrelated staged changes and skipping files with pre-existing or concurrent edits.
@@ -38,6 +38,13 @@ model-ladder is a [Claude Code](https://code.claude.com) and Codex plugin. The R
 ## Install
 
 Requires Git and Node.js 20 or later (the plugin does not install Node.js). Use it in a Git repository with at least one commit. In Codex, trust the plugin hooks in `/hooks` first.
+
+To update the Codex plugin:
+
+1. Run `codex plugin marketplace upgrade model-ladder`, then `codex plugin add model-ladder@model-ladder` to fetch and install the new version.
+2. Open `/hooks` in Codex CLI. If the model-ladder SessionStart hook is marked modified, review and re-trust it. Until trusted, Codex skips it, and automatic panel/HUD setup and autorun instructions are unavailable.
+3. Start a new Codex session. The hook points the `codex` function in your PowerShell profile at the new version automatically.
+4. On Windows, the first launch of the new version installs node-pty in the background, so that launch may start plain `codex`. Open a new PowerShell window and run `codex` to get the new HUD.
 
 Install and sign in to Claude Code first. For automation, make sure the Workflow tool is available. On Pro, enable it in `/config` before you install the plugin.
 

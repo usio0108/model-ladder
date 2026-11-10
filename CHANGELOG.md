@@ -6,10 +6,22 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
-- Every worktree removal (finish cleanup, run pruning, Codex attempt worktrees) now goes through one helper that removes locked worktrees with `--force --force`, prunes, and deletes the leftover `worktree-wf_*` branch. Branches left behind by earlier runs are swept too.
-- A removal that fails because Windows has a file in use is retried briefly, then left registered without blocking the run; the next run's pruning retries it.
-- The Claude Code band's `background` rows now show only tasks whose user question is still unfinished. Each background task (shell, workflow, agent) records the question it started under; a task-notification is not a new question, and a new question does not hide an earlier question's tasks. When the main session's turn ends with a final answer that is not waiting on the task, that question's tasks hide but stay tracked, so the end notification still removes them and records the duration; a notification waking the session shows that question's remaining tasks again. Limit: the plugin runtime gives `turn.complete` only the reply text (`answer`), no "waiting" flag, so a reply counts as waiting when it is empty or mentions waiting, the background or a notification (English or Chinese keywords). Uncertain replies show the row; a final answer using those words keeps its rows visible, and a wait phrased in other words is hidden. Still hidden while Claude runs a turn or a ladder agent runs.
-- Fixed the failing `skill instructions are plugin options` test, which required `pluginLayer(options)` verbatim while the band calls `pluginLayer(options as any)`.
+## [1.2.0] - 2026-11-10
+
+Codex reaches parity with the Claude Code side for the panel, usage handoff, skills and safety checks.
+
+- **Codex CLI HUD**: shows the plugin version, current usage with reset countdowns, guard state, context (`ctx 52k/258k (20.2%)`) and the running agent's elapsed/expected time, using the same formats as the Claude band (`12m`, not `720s`). Ctrl+\ expands it to every agent, skills and the usage guard (up to half the terminal height) and collapses it back to two rows. On narrow terminals the context goes first, then the version, then the key hints; both usage percentages always stay whole.
+- **Codex usage handoff**: with the SessionStart hook trusted, the CLI HUD queues a fixed handoff request once per known usage window; other surfaces get a reminder at SessionStart. Codex has a `handoff` skill, and a usage stop tells the session to write the AI handoff; the generated template stays the fallback at a hard limit.
+- **Codex worker skills are enforced**: workers report each configured capability, and an applicable, available one left unused fails the attempt before verification. The report is self-declared.
+- **Codex router safety**: a read-only route for a task that looks like an edit stops with `NEEDS_INPUT` before any worker runs, instead of reporting a false no-change success; it never grants write access on its own. An explicit no-edit instruction (for example 「別動任何檔案」, 「不修改」, "do not modify") keeps a read-only route even when the task contains edit words.
+- Codex and Claude panel titles show their packaged plugin version (`model-ladder (v1.2.0)`) and drop it before usage on narrow layouts. The Claude band now measures the whole header for this.
+- Codex DIRECT and the CLI HUD read token counts only from the rollout matching the session ID and cwd. Overrunning Codex agent rows show the latest command when the exec event stream provides one.
+- Without `node-pty`, the HUD starts plain `codex` without passing on its own HUD environment variables.
+- Codex retries a transient worktree creation failure once before reporting an error.
+- **Worktree cleanup**: every worktree removal (finish, run pruning, Codex attempts) goes through one helper that removes locked worktrees with `--force --force`, prunes, and deletes the leftover `worktree-wf_*` branch; branches left by earlier runs are swept too. A removal blocked by a Windows file lock is retried briefly, then left for the next run's pruning without blocking the current run.
+- **Claude band background rows** show only tasks whose user question is still unfinished. A final answer that is not waiting on a task hides that question's tasks (still tracked, so their end notification removes them and records the duration); a new question does not hide an earlier question's tasks. Limit: `turn.complete` gives only the reply text, so a reply counts as waiting when it is empty or mentions waiting, the background or a notification (English or Chinese keywords).
+- README documents how to update the Codex plugin: upgrade the marketplace, re-add the plugin, re-trust the modified SessionStart hook in `/hooks`, start a new session, then open a new PowerShell window once `node-pty` is installed.
+- Known limits: Codex does not track background tasks yet, and the watcher handoff remains manual.
 
 ## [1.1.5] - 2026-11-06
 

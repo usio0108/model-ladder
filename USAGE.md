@@ -39,6 +39,7 @@ Input also accepts JSON on stdin; on Windows, use a UTF-8 input file in the syst
 Reuse the panel across tasks; without a visible terminal, read runner progress in tool output.
 The HUD must launch Codex and cannot attach to an existing session. On Windows the Codex SessionStart hook sets this up by itself: it adds a marked `codex` function to your PowerShell profiles (PowerShell 7 and Windows PowerShell), so from the next new PowerShell window typing `codex` opens the HUD. Subcommands such as `exec` or `login`, redirected input or output, and a missing `node-pty` or Node.js run the native `codex.exe` directly; `node-pty` is installed in the background the first time. Set `"hudTakeover": false` in `~/.codex/model-ladder.json` to remove the function again.
 Windows requires native `codex.exe`, selected through PATH or `CODEX_BINARY`, rather than a `.cmd` or `.bat` shim.
+In the CLI HUD, Ctrl+] writes a run handoff template when available and shows how to invoke `$handoff` for conversation context. The HUD uses two terminal rows; Ctrl+\ expands it to show every agent, skills and the usage guard (up to half the terminal height) and collapses it back.
 
 ## Concurrent runs
 
@@ -132,7 +133,7 @@ Basic fields and controls are shown in the [README](README.md#band-claude-code).
 | Detail | Behavior |
 |---|---|
 | Context | Claude shows `ctx 287k/1M (28.7%)`, only the window if tokens are unknown, or nothing without a known window. |
-| Codex context | No automatic source exists; never invent numbers to enable DIRECT. |
+| Codex context | The runner reads token counts only from the rollout matching the current session ID and cwd; the HUD uses the ID provided by its trusted SessionStart hook. If a match is unavailable, context is omitted. Never invent numbers. |
 | Guard controls | Save only the changed field to personal settings; project overrides remain effective. |
 | Threshold | Enter or 5 seconds without typing saves it without changing the guard switch. |
 | Instructions | Only matching and global rules appear, without a label prefix; the Band previews one line and its arrow expands or collapses the text. |
@@ -143,6 +144,7 @@ Basic fields and controls are shown in the [README](README.md#band-claude-code).
 
 Manual handoff does not cancel the run.
 If Codex autorun or its panel is missing, check that the plugin is enabled, restart the session, and review/trust its hooks in `/hooks`.
+Hook trust applies to the current definition and content: after an update, open `/hooks` in Codex CLI, review and re-trust the model-ladder SessionStart hook if marked modified, then start a new session. Codex skips untrusted or modified hooks; manually running the script does not establish trust. See [OpenAI's hook documentation](https://learn.chatgpt.com/docs/hooks).
 Explicitly invoking the ladder skill also initializes the panel; no editor UI extension is installed.
 
 ## Usage protection details

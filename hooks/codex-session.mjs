@@ -1,9 +1,12 @@
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { autorunText } from './autorun.mjs'
 import { loadLayered, readLayers } from '../scripts/config.mjs'
 import { mergeConfig } from './config-layers.mjs'
 import { ensureHud as installHud, resolveDocumentsDir } from '../scripts/codex-hud-setup.mjs'
+import { artifactDir } from '../scripts/common.mjs'
+import { readCodexUsage } from '../scripts/codex-usage.mjs'
 
 const DEFAULTS = { autoRun: true, band: true, hudTakeover: true }
 const pluginRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]+$/, '')
@@ -27,8 +30,19 @@ function takeover(cwd, env, { platform = process.platform, ensureHud = installHu
 export function sessionText(input = {}, env = process.env, deps = {}) {
   if (env.MODEL_LADDER_ROLE) return ''
   const cwd = input.cwd ?? process.cwd()
+  if (env.MODEL_LADDER_HUD === '1' && /^[0-9a-f-]{36}$/i.test(env.MODEL_LADDER_HUD_TOKEN ?? '') && typeof input.session_id === 'string') {
+    try {
+      const dir = artifactDir(cwd)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, `hud-${env.MODEL_LADDER_HUD_TOKEN}.json`), JSON.stringify({ sessionId: input.session_id }))
+    } catch { /* The HUD can still run without session identification. */ }
+  }
   const config = loadLayered(cwd, 'codex', DEFAULTS)
   const parts = []
+  if (env.MODEL_LADDER_HUD !== '1' && config.usageGuard?.enabled !== false) {
+    const usage = readCodexUsage()
+    if (Number.isFinite(usage) && usage >= (config.usageGuard?.threshold ?? 90)) parts.push('The usage guard is at its threshold. Use the handoff skill to write a handoff from this conversation.')
+  }
   if (env.MODEL_LADDER_HUD === '1') {
     parts.push('model-ladder HUD is already running in this terminal. Reuse it; do not start a separate watcher.')
   } else if (config.band !== false && !['0', 'false', 'off', 'no'].includes(String(env.MODEL_LADDER_BAND ?? '').toLowerCase())) {

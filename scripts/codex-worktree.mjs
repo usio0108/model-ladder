@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { rmSync, writeFileSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isProtected } from '../hooks/guard.mjs'
 import { removeWorktree } from './common.mjs'
@@ -29,12 +29,22 @@ export function changed(cwd, from, to, artifactBaseline = from) {
 export function protectedChange(cwd, baseTree, tree, patterns) {
   return changed(cwd, baseTree, tree).find((file) => isProtected(file, patterns))
 }
-export function makeWorktree(root, run, number, baseCommit, baseTree) {
+export function makeWorktree(root, run, number, baseCommit, baseTree, { runGit = git, remove = removeWorktree, wait = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200) } = {}) {
   const cwd = join(run, `attempt-${number}`)
-  git(root, 'worktree', 'add', '--detach', '-q', cwd, baseCommit)
-  try { git(cwd, 'read-tree', '--reset', '-u', baseTree) }
-  catch (error) { removeWorktree(root, cwd); throw error }
-  return cwd
+  if (existsSync(cwd)) throw new Error(`Worktree path already exists: ${cwd}`)
+  for (let attempt = 0; ; attempt++) {
+    let added = false
+    try {
+      runGit(root, 'worktree', 'add', '--detach', '-q', cwd, baseCommit)
+      added = true
+      runGit(cwd, 'read-tree', '--reset', '-u', baseTree)
+      return cwd
+    } catch (error) {
+      if (added || existsSync(cwd)) remove(root, cwd)
+      if (attempt || existsSync(cwd) || !/resource temporarily unavailable|device or resource busy|sharing violation|used by another process|unable to (?:unlink|create).*permission denied/i.test(String(error.stderr ?? error.message))) throw error
+      wait()
+    }
+  }
 }
 // Concurrent runs apply one at a time (the 'apply' mutex). A patch that no longer applies, for example
 // because another run changed the same lines, is a CONFLICT that keeps the patch.

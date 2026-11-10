@@ -5,9 +5,36 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'nod
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { sessionText } from '../../hooks/codex-session.mjs'
+import { artifactDir } from '../../scripts/common.mjs'
 
 // Never touch the real PowerShell profile from a test.
 const OFF = { platform: 'linux' }
+
+test('HUD session writes its session ID to its own temporary marker', () => {
+  const base = artifactDir(process.cwd())
+  mkdirSync(base, { recursive: true })
+  const cwd = mkdtempSync(join(base, 'session-test-'))
+  const artifacts = artifactDir(cwd)
+  const token = '12345678-1234-1234-1234-123456789abc'
+  try {
+    sessionText({ cwd, session_id: 'abcdefab-1234-1234-1234-abcdefabcdef' }, { MODEL_LADDER_HUD: '1', MODEL_LADDER_HUD_TOKEN: token }, OFF)
+    assert.equal(JSON.parse(readFileSync(join(artifacts, `hud-${token}.json`), 'utf8')).sessionId, 'abcdefab-1234-1234-1234-abcdefabcdef')
+  } finally { rmSync(cwd, { recursive: true, force: true }); rmSync(artifacts, { recursive: true, force: true }) }
+})
+
+test('a non-HUD session is reminded to hand off when usage is above the threshold', () => {
+  const base = artifactDir(process.cwd())
+  mkdirSync(base, { recursive: true })
+  const cwd = mkdtempSync(join(base, 'session-guard-test-'))
+  const home = process.env.CODEX_HOME
+  try {
+    process.env.CODEX_HOME = join(cwd, 'codex')
+    mkdirSync(join(process.env.CODEX_HOME, 'sessions'), { recursive: true })
+    writeFileSync(join(process.env.CODEX_HOME, 'sessions', 'sample.jsonl'), JSON.stringify({ rate_limits: { primary: { used_percent: 95, resets_at: Date.now() / 1000 + 3600, window_minutes: 300 } } }))
+    assert.match(sessionText({ cwd }, {}, OFF), /usage guard.*handoff skill/i)
+    assert.doesNotMatch(sessionText({ cwd }, { MODEL_LADDER_HUD: '1' }, OFF), /usage guard.*handoff skill/i)
+  } finally { process.env.CODEX_HOME = home; rmSync(cwd, { recursive: true, force: true }) }
+})
 
 test('session reuses an active HUD, preserves panel fallback and skips internal roles', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'ml-session-'))

@@ -7,6 +7,26 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { displayWidth, truncate, renderLive, visibleAgents } from '../../scripts/codex-live.mjs'
+
+test('usage colors apply after truncation only when requested', () => {
+  const state = { usage: { fiveHour: 55, sevenDay: 95 } }
+  const saved = process.env.NO_COLOR
+  try {
+    delete process.env.NO_COLOR
+    assert.match(renderLive(state, { color: true }), /\x1b\[33m55%\x1b\[0m.*\x1b\[31m95%\x1b\[0m/)
+    assert.doesNotMatch(renderLive(state), /\x1b/)
+    process.env.NO_COLOR = '1'
+    assert.doesNotMatch(renderLive(state, { color: true }), /\x1b/)
+  } finally { if (saved === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = saved }
+})
+
+test('overrun shows the last command while the agent is running', () => {
+  const start = Date.now()
+  const agent = { phase: 'worker', model: 'luna', effort: 'low', startedAt: new Date(start).toISOString(), endedAt: null, task: 'original', activity: 'Command: npm test' }
+  const state = { agents: [agent], expected: { cells: {}, phases: { worker: 60000 } } }
+  assert.match(renderLive(state, { now: start + 59000 }), /original/)
+  assert.match(renderLive(state, { now: start + 61000 }), /Command: npm test/)
+})
 import { configureGuard, parseArgs, panelCommand } from '../../scripts/watch.mjs'
 
 test('truncation counts Chinese as two cells and preserves graphemes and single-line output', () => {
@@ -42,10 +62,10 @@ test('an overrun running agent shows ~ when the estimate is approximate, none wh
   const agent = { phase: 'worker', model: 'luna', effort: 'low', task: 'Fix greeting', startedAt: new Date(start).toISOString(), endedAt: null, pass: null, expectedMs: null }
   const timeCell = (frame) => frame.split(NL)[2].slice(14).split('  ')[0].trim()
   const few = { cells: { 'worker/luna/low': 420000 }, phases: {}, samples: { 'worker/luna/low': [420000, 1500000] } }
-  assert.equal(timeCell(renderLive({ agents: [agent], expected: few }, { now: start + 720000 })), '720s/~14m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected: few }, { now: start + 720000 })), '12m/~14m')
   const many = { cells: { 'worker/luna/low': 420000 }, phases: {}, samples: { 'worker/luna/low': [420000, 1200000, 1800000] } }
-  assert.equal(timeCell(renderLive({ agents: [agent], expected: many }, { now: start + 720000 })), '720s/30m')
-  assert.equal(timeCell(renderLive({ agents: [agent], expected: many }, { now: start + 300000 })), '300s/7m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected: many }, { now: start + 720000 })), '12m/30m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected: many }, { now: start + 300000 })), '5m/7m')
 })
 
 test('a running agent past its expected duration shows a recalibrated expectation in steps; a finished row keeps the original', () => {
@@ -53,15 +73,15 @@ test('a running agent past its expected duration shows a recalibrated expectatio
   const agent = { phase: 'worker', model: 'luna', effort: 'low', task: 'Fix greeting', startedAt: new Date(start).toISOString(), endedAt: null, pass: null, expectedMs: null }
   const expected = { cells: { 'worker/luna/low': 420000 }, phases: {} }
   const timeCell = (frame) => frame.split(NL)[2].slice(14).split('  ')[0].trim()
-  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 300000 })), '300s/7m')
-  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 720000 })), '720s/~14m')
-  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 839000 })), '839s/~14m')
-  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 840000 })), '840s/~18m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 300000 })), '5m/7m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 720000 })), '12m/~14m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 839000 })), '13m/~14m')
+  assert.equal(timeCell(renderLive({ agents: [agent], expected }, { now: start + 840000 })), '14m/~18m')
   // Without an expectation an overrun changes nothing.
-  assert.equal(timeCell(renderLive({ agents: [agent] }, { now: start + 720000 })), '720s')
+  assert.equal(timeCell(renderLive({ agents: [agent] }, { now: start + 720000 })), '12m')
   // A finished row keeps the expected duration it finished with, so the overrun stays visible.
   const done = { ...agent, endedAt: new Date(start + 720000).toISOString(), pass: true, expectedMs: 420000 }
-  assert.equal(timeCell(renderLive({ agents: [done], expected }, { now: start + 725000 })), '✓ 720s/7m')
+  assert.equal(timeCell(renderLive({ agents: [done], expected }, { now: start + 725000 })), '✓ 12m/7m')
 })
 test('time column shows each agent\'s elapsed over its own expected duration, read live, freezing with the row; elapsed alone without samples', () => {
   const start = Date.parse('2026-10-23T00:00:00Z')
@@ -97,7 +117,7 @@ test('time column shows each agent\'s elapsed over its own expected duration, re
   for (const expectedMs of [undefined, null, 0, NaN]) assert.equal(timeCell(renderLive({ agents: [{ ...done, expectedMs }] }, { now: start + 14000 })), '✓ 5s')
   // The time column is wider than 9 and every line still fits the panel.
   const long = renderLive({ agents: [agent], expected: { cells: {}, phases: { worker: 90 * 3600000 } } }, { now: start + 100000000, width: 60 })
-  assert.equal(timeCell(long), '100000s/4d')
+  assert.equal(timeCell(long), '1d/4d')
   const header = long.split(NL)[1]
   assert.ok(header.indexOf('task') - header.indexOf('act./est.') > 9 + 2)
   assert.ok(long.split(NL).every((line) => displayWidth(line) <= 60))
@@ -134,11 +154,25 @@ test('panel shows phase lights, reset countdown and skill instructions', () => {
   const now = Date.now()
   const agent = { phase: 'worker', model: 'luna', effort: 'low', task: 'fix', startedAt: new Date(now).toISOString(), endedAt: null }
   const state = { agents: [agent], usage: { fiveHour: 15, fiveHourResetsAt: now / 1000 + 16440 }, skills: { worker: 'ponytail' } }
-  assert.match(renderLive(state, { now }), /🟢 model-ladder.*5h\/5h 15%/)
+  assert.match(renderLive(state, { now, width: 80 }), /🟢 model-ladder \(v\d+\.\d+\.\d+\).*5h\/5h 15%/)
+  assert.match(renderLive(state, { now, width: 49 }), /🟢 model-ladder.*5h\/5h 15%/)
+  assert.match(renderLive(state, { now, width: 49 }), /\(v\d+\.\d+\.\d+\)/)
   assert.match(renderLive(state, { now }), /worker ponytail/)
   assert.doesNotMatch(renderLive(state, { now }), /skill instructions:/)
   assert.match(renderLive({ ...state, agents: [{ ...agent, retry: true }] }), /🔴/)
   assert.match(renderLive({ ...state, agents: [{ ...agent, phase: 'verify-command' }] }), /🔵/)
+})
+
+test('narrow live headers omit the version before either usage window', () => {
+  const now = Date.parse('2026-11-10T00:00:00Z')
+  const state = {
+    agents: [{ phase: 'worker', model: 'luna', effort: 'low', task: 'fix', startedAt: new Date(now).toISOString(), endedAt: null }],
+    usage: { fiveHour: 33, fiveHourResetsAt: now / 1000 + 4 * 3600, sevenDay: 70, sevenDayResetsAt: now / 1000 + 2 * 86400 },
+  }
+  const narrow = renderLive(state, { now, width: 50 })
+  assert.match(narrow, /4h\/5h 33%.*2d\/7d 70%/)
+  assert.doesNotMatch(narrow, /\(v\d+\.\d+\.\d+\)/)
+  assert.match(renderLive(state, { now, width: 80 }), /\(v\d+\.\d+\.\d+\).*4h\/5h 33%.*2d\/7d 70%/)
 })
 
 test('panel controls persist settings and hand off active and completed runs', () => {

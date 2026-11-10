@@ -59,6 +59,30 @@ const BAND = {
 // The engine hands fs hooks resolved paths: on Windows /repos/app arrives as C:\repos\app.
 const slash = (path: string) => path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
 
+test('band title reads only the packaged Claude manifest and drops its version before usage when it does not fit', async ($, on) => {
+  mock.clock(on, { now: Date.parse('2026-11-10T00:00:00Z') })
+  mock.env(on, { HOME: '/home/test', CLAUDE_PLUGIN_ROOT: '/plugins/model-ladder' })
+  on('session.cwd', () => ({ value: '/repos/app' }))
+  on('session.repo', () => ({ value: { root: '/repos/app', remote: null } }))
+  on('session.usage', () => ({ value: { rateLimits: [
+    { kind: 'five_hour', percentUsed: 33, resetsAt: '2026-11-10T04:00:00Z' },
+    { kind: 'seven_day', percentUsed: 70, resetsAt: '2026-11-12T00:00:00Z' },
+  ] } }))
+  on('fs.read', ($, e) => slash(e.path) === '/plugins/model-ladder/.claude-plugin/plugin.json'
+    ? { value: '{"version":"2.3.4"}' }
+    : { deny: 'File does not exist' })
+  on('fs.list', () => ({ value: [] }))
+  const wide = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await wide.find({ type: 'Text', text: 'model-ladder (v2.3.4)' })).toBeDefined()
+  await wide.unmount()
+  const narrow = await $.ui.mount({ ...BAND, surface: 'terminal', viewport: { columns: 49, rows: 20 }, props: { ...BAND.props, bodyColumns: 49 } })
+  expect(await narrow.find({ type: 'Text', text: 'model-ladder' })).toBeDefined()
+  expect(await narrow.find({ type: 'Text', text: 'model-ladder (v2.3.4)' })).toBeUndefined()
+  expect(await narrow.find({ type: 'Text', text: '33%' })).toBeDefined()
+  expect(await narrow.find({ type: 'Text', text: '70%' })).toBeDefined()
+  await narrow.unmount()
+})
+
 for (const scenario of [
   { name: 'a .git above the cwd', cwd: '/repos/app/px1', git: '/repos/app/.git', root: '/repos/app' },
   { name: 'no .git anywhere falls back to the cwd', cwd: '/repos/loose/px1', git: null, root: '/repos/loose/px1' },

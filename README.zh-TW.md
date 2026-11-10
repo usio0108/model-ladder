@@ -25,13 +25,20 @@ model-ladder 是 [Claude Code](https://code.claude.com) 與 Codex 的外掛。Ro
 - **預估資訊**：每個 agent 列的時間欄顯示該 agent 自己的「經過/預期時長」（例如 `5s/12m`；執行中的 agent 超過預期後，預期時長會分段重新估計，已結束的列保留原值，僅 worker、test-writer、verifier 列；來自先前成功的 run，尚無歷史時採用 router 給的單次分鐘數；router、diagnose、final diagnosis 列只顯示經過時間）；開跑時若預估某個用量時間窗不足或有風險，會在 worker 開始前詢問一次；大型任務不再要求拆分確認。
 - **使用量保護**：偵測到用量停止條件時結束目前 run 並強制停止同機其他已註冊 run。
 - **交接文件**：用量停止或執行 `/model-ladder:handoff` 時建立 `.model-ladder/HANDOFF.md`，由主 session 根據對話改寫，並保留程式產生的驗證附錄。
-- **Band / panel / HUD**：透過 Claude band 或 Codex 終端顯示查看角色、用量與保護控制，Claude 另顯示 context token 與百分比。
+- **Band / panel / HUD**：透過 Claude band 或 Codex 終端顯示查看角色、用量與保護控制；CLI HUD 能識別 session 時也會顯示 context。
 - **自訂角色指示**：`worker_skills` 與 `verifier_skills` 可指定角色權限內可用的 skills 與工具，Claude Router 則僅能使用 Read、Grep、Glob。
 - **Codex 逾時續跑**：含 checkpoint 的 `TIMEOUT` 結果可用 `resumeRun` 延續草稿，通過驗證後才套用。
 
 ## 安裝
 
 需要 Git 與 Node.js 20 以上（外掛不會自動安裝 Node.js）。請在至少有一個 commit 的 Git repo 中使用；Codex 需先在 `/hooks` 信任外掛 hooks。
+
+更新 Codex 外掛的步驟：
+
+1. 執行 `codex plugin marketplace upgrade model-ladder`，再執行 `codex plugin add model-ladder@model-ladder` 取得並安裝新版。
+2. 在 Codex CLI 開啟 `/hooks`。若 model-ladder 的 SessionStart hook 顯示已修改，請檢閱並重新信任。信任前 Codex 會略過它，無法自動設定 panel／HUD 或載入 autorun 指示。
+3. 開啟新的 Codex session。hook 會自動把 PowerShell profile 中的 `codex` 函式改指向新版本。
+4. Windows 上新版本第一次啟動時，node-pty 會在背景安裝，因此該次可能是一般 `codex`。之後開新的 PowerShell 視窗輸入 `codex`，即可進入新版 HUD。
 
 請先安裝並登入 Claude Code。若要使用自動化，請確認 Workflow 工具可用。Pro 方案請在安裝外掛前到 `/config` 啟用 Workflow。
 

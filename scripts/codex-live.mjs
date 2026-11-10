@@ -1,8 +1,17 @@
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { displayWidth, panelTitle } from './panel-title.mjs'
 import { roundSpan } from '../hooks/band/remaining.mjs'
 import { agentExpected, agentSamples, liveExpected } from '../hooks/band/rows.mjs'
+
+// Elapsed as the Claude band shows it: 45s, 12m, 3h, 2d.
+const span = (ms) => (ms < 60000 ? `${Math.floor(ms / 1000)}s` : ms < 3600000 ? `${Math.floor(ms / 60000)}m` : ms < 86400000 ? `${Math.floor(ms / 3600000)}h` : `${Math.floor(ms / 86400000)}d`)
+
+const CODEX_TITLE = (() => {
+  try { return panelTitle(readFileSync(new URL('../.codex-plugin/plugin.json', import.meta.url), 'utf8')) }
+  catch { return 'model-ladder' }
+})()
 
 export function atomicJson(path, value) {
   mkdirSync(dirname(path), { recursive: true })
@@ -25,9 +34,7 @@ function cellWidth(text) {
     code >= 0xff01 && code <= 0xff60 || code >= 0xffe0 && code <= 0xffe6 ||
     code >= 0x20000 && code <= 0x3fffd) ? 2 : 1
 }
-export function displayWidth(text) {
-  return [...segments.segment(clean(text))].reduce((width, { segment }) => width + cellWidth(segment), 0)
-}
+export { displayWidth }
 export function truncate(text, width) {
   text = clean(text)
   if (width <= 0) return ''
@@ -48,7 +55,7 @@ const pad = (text, width) => {
 export function visibleAgents(agents = [], now = Date.now()) {
   return agents.filter((agent) => agent.endedAt === null || now - Date.parse(agent.endedAt) < 10000)
 }
-export function renderLive(state, { width = 80, now = Date.now(), guard = { enabled: true, threshold: 90 } } = {}) {
+export function renderLive(state, { width = 80, now = Date.now(), guard = { enabled: true, threshold: 90 }, color = false } = {}) {
   const agents = visibleAgents(state?.agents, now)
   const idle = !(state?.agents ?? []).some((agent) => agent.endedAt === null)
   const percent = (value) => Number.isFinite(value) ? `${value}%` : '?'
@@ -59,6 +66,7 @@ export function renderLive(state, { width = 80, now = Date.now(), guard = { enab
     return `${ms > 0 ? roundSpan(ms) + '/' : ''}${label} ${percent(state?.usage?.[name])}`
   }
   const lines = [`▴ ${dot}model-ladder ── ${window('fiveHour', '5h')} · ${window('sevenDay', '7d')}${idle ? ' · idle' : ''}`]
+  const title = displayWidth(lines[0].replace('model-ladder', CODEX_TITLE)) > width ? 'model-ladder' : CODEX_TITLE
   const modelWidth = Math.min(32, Math.max(12, ...agents.map((a) => displayWidth(`${a.model}/${a.effort}`))))
   // Elapsed, then "/" and this agent's own expected duration. A running row reads it from state.expected (the
   // expectations table, scripts/forecast.mjs agentExpectations) at every render; a finished row keeps agent.expectedMs.
@@ -67,16 +75,24 @@ export function renderLive(state, { width = 80, now = Date.now(), guard = { enab
     const live = agent.endedAt ? null : liveExpected(seconds * 1000, agentExpected(state?.expected, agent.phase, agent.model, agent.effort), agentSamples(state?.expected, agent.phase, agent.model, agent.effort))
     const ms = agent.endedAt ? agent.expectedMs : live?.ms
     const expected = Number.isFinite(ms) && ms > 0 ? `/${live?.approx ? '~' : ''}${roundSpan(ms)}` : ''
-    return `${agent.endedAt ? agent.pass === false ? '✗ ' : '✓ ' : ''}${seconds}s${expected}`
+    return `${agent.endedAt ? agent.pass === false ? '✗ ' : '✓ ' : ''}${span(seconds * 1000)}${expected}`
   })
   const timeWidth = Math.max(12, ...times.map(displayWidth))
   lines.push(`${pad('model/effort', modelWidth)}  ${pad('act./est.', timeWidth)}  task`)
   for (const [i, agent] of agents.entries()) {
     const prefix = `${pad(`${agent.model}/${agent.effort}`, modelWidth)}  ${pad(times[i], timeWidth)}  `
-    lines.push(prefix + truncate(`${agent.phase}: ${agent.task}`, Math.max(0, width - displayWidth(prefix))))
+    const elapsed = now - Date.parse(agent.startedAt)
+    const expected = agentExpected(state?.expected, agent.phase, agent.model, agent.effort)
+    const task = !agent.endedAt && expected > 0 && elapsed > expected && agent.activity ? agent.activity : agent.task
+    lines.push(prefix + truncate(`${agent.phase}: ${task}`, Math.max(0, width - displayWidth(prefix))))
   }
   const withs = Object.entries(state?.skills ?? {}).filter(([, skills]) => skills?.trim()).map(([role, skills]) => `${role} ${skills}`)
   if (withs.length) lines.push(withs.join(' · '))
+  const reports = (state?.result?.attempts ?? []).flatMap((attempt, i) => attempt.skills?.length ? [`#${i + 1} ${attempt.skills.map((s) => `${s.name} ${s.used ? 'used' : !s.applies ? 'not applicable' : !s.available ? 'unavailable' : 'skipped'}`).join(', ')}`] : [])
+  if (reports.length) lines.push(`Skills    ${reports.join(' · ')}`)
   lines.push(`[usage guard: ${guard.enabled ? 'on' : 'off'}]${guard.enabled ? `  threshold ${guard.threshold}%` : ''}`)
-  return lines.map((line) => truncate(line, width)).join('\n')
+  return lines.map((line, i) => {
+    const text = truncate(i === 0 ? line.replace('model-ladder', title) : line, width)
+    return i === 0 && color && !('NO_COLOR' in process.env) ? text.replace(/(\d+(?:\.\d+)?)%/g, (match, value) => Number(value) >= guard.threshold ? `\x1b[31m${match}\x1b[0m` : Number(value) >= 50 ? `\x1b[33m${match}\x1b[0m` : match) : text
+  }).join('\n')
 }
