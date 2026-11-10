@@ -2,7 +2,7 @@ import '../helpers/isolate-home.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import * as realFs from 'node:fs'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, realpathSync } from 'node:fs'
 import { spawnSync as nodeSpawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -96,7 +96,8 @@ function selectedRoot(pluginRoot, base) {
 }
 
 test('the generated PowerShell picks the newest complete version, else falls back to native codex', { skip: powershell ? false : 'no PowerShell available' }, (t) => {
-  const base = mkdtempSync(join(tmpdir(), 'ml-hud-select-'))
+  // The long path: Windows runners hand out an 8.3 temp path (RUNNER~1) that PowerShell expands.
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'ml-hud-select-')))
   t.after(() => rmSync(base, { recursive: true, force: true }))
   const cache = join(base, 'model-ladder')
   const make = (version, files) => { for (const file of files) mkdirSync(join(cache, version, file), { recursive: true }) }
