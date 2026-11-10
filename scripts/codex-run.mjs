@@ -125,7 +125,11 @@ export async function runLadder(input, options = {}) {
   else options.signal?.addEventListener('abort', cancel, { once: true })
   let usageStop = null, usagePoll = null
   // options.usageSnapshot replaces the subscription sample (tests); otherwise forecast.mjs reads Codex's own.
-  const observe = (boundary) => updateForecast(root, forecast, past, liveGuard, boundary, Date.now(), options.usageSnapshot?.())
+  // Sample before reading the clock: a sample taken a millisecond after `now` counts as from the future and is discarded.
+  const observe = (boundary) => {
+    const sample = options.usageSnapshot?.()
+    return updateForecast(root, forecast, past, liveGuard, boundary, Date.now(), sample)
+  }
   const publish = () => {
     if (!live) return
     live.updatedAt = new Date().toISOString()

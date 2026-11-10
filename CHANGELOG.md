@@ -6,6 +6,8 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+- The Codex runner reads the usage sample before the clock at each forecast boundary. A sample taken a millisecond later counted as from the future, so the usage-risk question was occasionally skipped.
+
 ## [1.2.1] - 2026-11-10
 
 - The PowerShell `codex` function no longer hardcodes one plugin version folder: each run it picks the newest complete installed version (`.codex-plugin/plugin.json`, `scripts/codex-hud.mjs`, `hooks/band/remaining.mjs`, `node_modules/node-pty`) and runs native `codex` when none is complete. This fixes `codex` breaking after an update removed part of the old cached version.

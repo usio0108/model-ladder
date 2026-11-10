@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+- Codex runner 在每個預估邊界改為先讀用量樣本、再取時間。原本樣本若晚 1 毫秒取得會被視為來自未來而捨棄，導致偶爾跳過用量風險確認。
+
 ## [1.2.1] - 2026-11-10
 
 - PowerShell `codex` 函式不再寫死單一外掛版本資料夾：每次執行都挑已安裝的最新完整版本（含 `.codex-plugin/plugin.json`、`scripts/codex-hud.mjs`、`hooks/band/remaining.mjs`、`node_modules/node-pty`），沒有完整版本時執行原生 `codex`。修正更新後舊版快取被刪掉一部分而讓 `codex` 壞掉的問題。
