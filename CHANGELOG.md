@@ -6,6 +6,11 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-10
+
+- The PowerShell `codex` function no longer hardcodes one plugin version folder: each run it picks the newest complete installed version (`.codex-plugin/plugin.json`, `scripts/codex-hud.mjs`, `hooks/band/remaining.mjs`, `node_modules/node-pty`) and runs native `codex` when none is complete. This fixes `codex` breaking after an update removed part of the old cached version.
+- `plugin`, `review`, `update`, `doctor`, `queue`, `archive`, `delete`, `unarchive`, `migrate-rollouts`, `migrate-nfs-db`, `features`, `exec-server`, `remote-control`, `app`, `cloud` and `sandbox` now run native `codex` instead of the HUD.
+
 ## [1.2.0] - 2026-11-10
 
 Codex reaches parity with the Claude Code side for the panel, usage handoff, skills and safety checks.

@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-10
+
+- PowerShell `codex` 函式不再寫死單一外掛版本資料夾：每次執行都挑已安裝的最新完整版本（含 `.codex-plugin/plugin.json`、`scripts/codex-hud.mjs`、`hooks/band/remaining.mjs`、`node_modules/node-pty`），沒有完整版本時執行原生 `codex`。修正更新後舊版快取被刪掉一部分而讓 `codex` 壞掉的問題。
+- `plugin`、`review`、`update`、`doctor`、`queue`、`archive`、`delete`、`unarchive`、`migrate-rollouts`、`migrate-nfs-db`、`features`、`exec-server`、`remote-control`、`app`、`cloud`、`sandbox` 改為直接執行原生 `codex`，不再進入 HUD。
+
 ## [1.2.0] - 2026-11-10
 
 Codex 在面板、用量交接、skills 與安全檢查上補齊到與 Claude Code 端一致。

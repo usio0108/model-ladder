@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import * as realFs from 'node:fs'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { spawnSync as nodeSpawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { artifactDir } from '../../scripts/common.mjs'
@@ -50,12 +51,78 @@ test('block defines function codex with every passthrough rule and never mention
   assert.match(block, /scripts\/codex-hud\.mjs/)
   assert.match(block, /Get-Command node -CommandType Application/)
   assert.match(block, /\$env:CODEX_BINARY = \$exe\.Source/)
-  assert.match(block, /node 'C:\/Users\/me\/plugin root\/model-ladder\/scripts\/codex-hud\.mjs' --cwd \(Get-Location\)\.Path -- @args/)
+  assert.match(block, /node "\$root\/scripts\/codex-hud\.mjs" --cwd \(Get-Location\)\.Path -- @args/)
   assert.match(block, /finally \{\n.*\$env:CODEX_BINARY = \$previous/)
   assert.doesNotMatch(block, /\.cmd|\.bat/i)
   assert.equal(block.includes('\r'), false)
-  assert.match(hudBlock("C:\\it's here"), /\$root = 'C:\/it''s here'/)
+  assert.match(hudBlock("C:\\it's here"), /\$candidates = @\('C:\/it''s here'\)/)
 })
+
+test('passthrough covers the non-interactive Codex subcommands and leaves interactive ones on the HUD', () => {
+  const block = hudBlock('/x')
+  for (const word of ['plugin', 'review', 'update', 'doctor', 'queue', 'archive', 'delete', 'unarchive', 'migrate-rollouts', 'migrate-nfs-db', 'features', 'exec-server', 'remote-control', 'app', 'cloud', 'sandbox']) {
+    assert.ok(PASSTHROUGH.includes(word), word)
+    assert.ok(block.includes(`'${word}'`), word)
+  }
+  for (const word of ['resume', 'fork', 'agents']) assert.equal(PASSTHROUGH.includes(word), false, word)
+})
+
+test('a semver plugin root scans its parent folder and checks every required file', () => {
+  const block = hudBlock('C:\\cache\\model-ladder\\model-ladder\\1.2.0')
+  assert.match(block, /Get-ChildItem -LiteralPath 'C:\/cache\/model-ladder\/model-ladder' -Directory/)
+  assert.match(block, /Sort-Object \{ \[version\]\$_\.Name \} -Descending/)
+  for (const part of ['.codex-plugin/plugin.json', 'scripts/codex-hud.mjs', 'hooks/band/remaining.mjs', 'node_modules/node-pty']) assert.ok(block.includes(`'${part}'`), part)
+  assert.doesNotMatch(block, /\$root = 'C:/)
+})
+
+test('a non-semver plugin root is used alone with the same completeness check', () => {
+  const block = hudBlock('C:\\dev\\model-ladder')
+  assert.doesNotMatch(block, /Get-ChildItem/)
+  assert.match(block, /\$candidates = @\('C:\/dev\/model-ladder'\)/)
+  assert.match(block, /'hooks\/band\/remaining\.mjs'/)
+  assert.match(block, /if \(-not \$plain -and -not \$root\) \{ \$plain = \$true \}/)
+})
+
+const powershell = process.platform === 'win32' ? ['pwsh', 'powershell.exe'].find((exe) => !nodeSpawnSync(exe, ['-NoProfile', '-Command', '1'], { windowsHide: true }).error) : ['pwsh'].find((exe) => !nodeSpawnSync(exe, ['-NoProfile', '-Command', '1']).error)
+
+// Runs only the generated version-selection lines (everything before the native codex lookup) and prints the chosen root.
+function selectedRoot(pluginRoot, base) {
+  const lines = hudBlock(pluginRoot).split('\n')
+  const body = lines.slice(lines.indexOf('function codex {') + 1, lines.findIndex((line) => line.startsWith('  $exe =')))
+  const script = join(base, 'select.ps1')
+  writeFileSync(script, `${body.join('\n')}\nif ($root) { Write-Output "ROOT=$root" } else { Write-Output 'ROOT=NONE' }\n`)
+  const result = nodeSpawnSync(powershell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { encoding: 'utf8', windowsHide: true })
+  return result.stdout.trim().replace(/^ROOT=/, '').replace(/\\/g, '/')
+}
+
+test('the generated PowerShell picks the newest complete version, else falls back to native codex', { skip: powershell ? false : 'no PowerShell available' }, (t) => {
+  const base = mkdtempSync(join(tmpdir(), 'ml-hud-select-'))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const cache = join(base, 'model-ladder')
+  const make = (version, files) => { for (const file of files) mkdirSync(join(cache, version, file), { recursive: true }) }
+  const full = ['.codex-plugin', 'scripts', 'hooks/band', 'node_modules/node-pty']
+  const write = (version) => {
+    writeFileSync(join(cache, version, '.codex-plugin', 'plugin.json'), '{}')
+    writeFileSync(join(cache, version, 'scripts', 'codex-hud.mjs'), '')
+    writeFileSync(join(cache, version, 'hooks', 'band', 'remaining.mjs'), '')
+  }
+  make('1.1.5', ['scripts', 'node_modules/node-pty'])
+  writeFileSync(join(cache, '1.1.5', 'scripts', 'codex-hud.mjs'), '')
+  make('1.2.0', full); write('1.2.0')
+  make('1.10.0', ['scripts', 'node_modules/node-pty'])
+  writeFileSync(join(cache, '1.10.0', 'scripts', 'codex-hud.mjs'), '')
+  assert.equal(selectedRoot(join(cache, '1.1.5'), base), slash(join(cache, '1.2.0')))
+  make('1.10.0', full); write('1.10.0')
+  assert.equal(selectedRoot(join(cache, '1.2.0'), base), slash(join(cache, '1.10.0')))
+  rmSync(join(cache, '1.10.0'), { recursive: true }); rmSync(join(cache, '1.2.0', 'hooks'), { recursive: true })
+  assert.equal(selectedRoot(join(cache, '1.1.5'), base), 'NONE')
+  // A non-semver root is checked on its own.
+  const dev = join(base, 'dev')
+  mkdirSync(join(dev, 'node_modules', 'node-pty'), { recursive: true })
+  assert.equal(selectedRoot(dev, base), 'NONE')
+})
+
+const slash = (path) => path.replace(/\\/g, '/')
 
 test('applyBlock inserts, replaces and removes only the marked block', () => {
   const one = hudBlock('/one'), two = hudBlock('/two')
