@@ -443,6 +443,89 @@ test('Ctrl+\\ expands the HUD to every agent row and collapses it back, resizing
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })
 
+const win32 = (vk, uc, kd, cs = 8, rc = 1) => `\x1b[${vk};0;${uc};${kd};${cs};${rc}_`
+
+async function win32Harness(t, name) {
+  const cwd = mkdtempSync(join(tmpdir(), `ml-hud-${name}-`))
+  mkdirSync(join(cwd, '.model-ladder', 'runs'), { recursive: true })
+  writeFileSync(join(cwd, '.model-ladder', 'live.json'), JSON.stringify({ task: 'test', runId: 'r', agents: [{ phase: 'worker', model: 'm', effort: 'low', startedAt: new Date().toISOString(), endedAt: null }] }))
+  writeFileSync(join(cwd, '.model-ladder', 'runs', 'r.json'), JSON.stringify({ runId: 'r', pid: process.pid }))
+  const h = harness(t, { cwd })
+  h.output.rows = 20; h.output.columns = 120
+  const forwarded = []
+  h.child.write = (text) => forwarded.push(text)
+  const { running } = await h.start()
+  const done = async () => { h.exit({ exitCode: 0 }); await running; rmSync(cwd, { recursive: true, force: true }) }
+  return { h, cwd, forwarded, done }
+}
+
+test('Windows Terminal win32-input-mode Ctrl+\\ press and release toggles expand and is not forwarded', async (t) => {
+  const { h, forwarded, done } = await win32Harness(t, 'w32-expand')
+  const before = h.calls.resize.length
+  h.input.emit('data', Buffer.from(win32(220, 28, 1) + win32(220, 28, 0)))
+  assert.deepEqual(forwarded, [])
+  assert.equal(h.calls.resize.length, before + 1)
+  h.input.emit('data', Buffer.from(win32(220, 28, 1, 8, 3)))
+  assert.equal(h.calls.resize.length, before + 2, 'repeat count above 1 fires once')
+  h.input.emit('data', Buffer.from(win32(220, 28, 0)))
+  assert.deepEqual(forwarded, [])
+  await done()
+})
+
+test('win32-input-mode Ctrl+] triggers the handoff and is not forwarded', async (t) => {
+  const { h, cwd, forwarded, done } = await win32Harness(t, 'w32-handoff')
+  h.input.emit('data', Buffer.from(win32(221, 29, 1) + win32(221, 29, 0)))
+  assert.deepEqual(forwarded, [])
+  assert.ok(existsSync(join(cwd, '.model-ladder', 'HANDOFF.md')))
+  assert.match(h.writes.join(''), /Handoff saved; use \$handoff/)
+  await done()
+})
+
+test('win32-input-mode Ctrl+\\ with no Unicode character is recognized by virtual key and Ctrl state only', async (t) => {
+  const { h, forwarded, done } = await win32Harness(t, 'w32-vk')
+  const before = h.calls.resize.length
+  h.input.emit('data', Buffer.from(win32(220, 0, 1, 0x04)))
+  assert.equal(h.calls.resize.length, before + 1)
+  h.input.emit('data', Buffer.from(win32(220, 0, 1, 0)))
+  assert.equal(h.calls.resize.length, before + 1, 'no Ctrl state means a plain backslash')
+  assert.deepEqual(forwarded, [win32(220, 0, 1, 0)])
+  await done()
+})
+
+test('other win32-input-mode sequences and bytes are forwarded unchanged and in order', async (t) => {
+  const { h, forwarded, done } = await win32Harness(t, 'w32-pass')
+  const a = win32(65, 97, 1, 0), aUp = win32(65, 97, 0, 0)
+  h.input.emit('data', Buffer.from(`x${a}${aUp}\x1b[A`))
+  assert.equal(forwarded.join(''), `x${a}${aUp}\x1b[A`)
+  forwarded.length = 0
+  h.input.emit('data', Buffer.from(`${a}${win32(220, 28, 1)}${aUp}`))
+  assert.equal(forwarded.join(''), a + aUp)
+  await done()
+})
+
+test('a win32 sequence split across data events works and a stray ESC [ is not stalled', async (t) => {
+  const { h, forwarded, done } = await win32Harness(t, 'w32-split')
+  const before = h.calls.resize.length
+  const seq = win32(220, 28, 1)
+  h.input.emit('data', Buffer.from(seq.slice(0, 2)))
+  assert.deepEqual(forwarded, [], 'a partial prefix is held')
+  h.input.emit('data', Buffer.from(seq.slice(2, 9)))
+  h.input.emit('data', Buffer.from(seq.slice(9)))
+  assert.deepEqual(forwarded, [])
+  assert.equal(h.calls.resize.length, before + 1)
+  // A held fragment that never completes is forwarded after a short delay.
+  h.input.emit('data', Buffer.from('\x1b['))
+  assert.deepEqual(forwarded, [])
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  assert.equal(forwarded.join(''), '\x1b[')
+  forwarded.length = 0
+  // A fragment that cannot become a win32 sequence is forwarded with the next data in order.
+  h.input.emit('data', Buffer.from('\x1b['))
+  h.input.emit('data', Buffer.from('Ab'))
+  assert.equal(forwarded.join(''), '\x1b[Ab')
+  await done()
+})
+
 test('HUD header hint offers ^\\ and drops it after ctx and the version on narrow widths', () => {
   const now = Date.parse('2026-11-10T00:00:00Z')
   const state = {

@@ -6,6 +6,10 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-11-10
+
+- The Codex HUD now recognizes Ctrl+\ and Ctrl+] sent as Windows Terminal win32-input-mode sequences (`ESC [ Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`), which ConPTY switches on. Before, the keys never matched the raw 0x1c/0x1d bytes and went to Codex. Both the press and release sequences are now dropped from forwarded input, an action fires once per press, sequences split across reads are reassembled, and all other input is forwarded unchanged.
+
 ## [1.2.2] - 2026-11-10
 
 - The Codex SessionStart hook now has a `statusMessage` ("Loading model-ladder..."), so `/hooks` no longer lists it as an unnamed hook. On Windows it also shows the user a `systemMessage` about the background `node-pty` install: an installing notice with the `npm-ci.log` path, and a one-time ready notice per plugin version.

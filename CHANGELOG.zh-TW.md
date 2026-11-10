@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-11-10
+
+- Codex HUD 現在能辨識 Windows Terminal 以 win32-input-mode 序列（`ESC [ Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`，ConPTY 會啟用此模式）送出的 Ctrl+\ 與 Ctrl+]。先前這些按鍵無法比對原始 0x1c/0x1d 位元組，因而被轉給 Codex。現在按下與放開的序列都不會轉給 Codex，每次按下只觸發一次動作，被切在兩次讀取之間的序列會重組，其他輸入一律原樣轉送。
+
 ## [1.2.2] - 2026-11-10
 
 - Codex SessionStart hook 加上 `statusMessage`（"Loading model-ladder..."），`/hooks` 不再顯示為 Unnamed hook。Windows 上也會以 `systemMessage` 告知使用者 `node-pty` 背景安裝狀態：安裝中時附上 `npm-ci.log` 路徑，就緒時每個外掛版本只顯示一次。

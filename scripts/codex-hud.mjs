@@ -174,9 +174,44 @@ export async function runHud({ cwd = process.cwd(), args = [], input = process.s
   }
   const resize = () => { const next = size(); relayout(next, wantedRows(next)) }
   const decoder = new StringDecoder('utf8')
+  // Windows Terminal sends keys as ESC [ Vk ; Sc ; Uc ; Kd ; Cs ; Rc _ once ConPTY enables win32-input-mode.
+  const win32Key = /\x1b\[(\d+);(\d+);(\d+);(\d+);(\d+);(\d+)_/y
+  const win32Prefix = /\x1b\[[\d;]{0,40}$/
+  let held = '', heldTimer
+  // Split input into forwarded text and HUD keys; press events become keys, releases are dropped.
+  const tokenize = (text) => {
+    const parts = [''], keys = []
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i]
+      if (ch === '\x1c' || ch === '\x1d') { keys.push(ch); parts.push(''); continue }
+      if (ch === '\x1b' && text[i + 1] === '[') {
+        win32Key.lastIndex = i
+        const m = win32Key.exec(text)
+        if (m) {
+          const [vk, , uc, kd, cs] = m.slice(1).map(Number)
+          const key = uc === 28 || (uc === 0 && vk === 220 && cs & 0x0c) ? '\x1c' : uc === 29 || (uc === 0 && vk === 221 && cs & 0x0c) ? '\x1d' : ''
+          if (key) {
+            if (kd === 1) { keys.push(key); parts.push('') }
+            i += m[0].length - 1
+            continue
+          }
+          parts[parts.length - 1] += m[0]; i += m[0].length - 1
+          continue
+        }
+        const tail = win32Prefix.exec(text.slice(i))
+        if (tail) { held = tail[0]; break }
+      }
+      parts[parts.length - 1] += ch
+    }
+    return { parts, keys }
+  }
   const forward = guard((data) => {
-    const text = typeof data === 'string' ? data : decoder.write(data)
-    const parts = text.split(/[\x1c\x1d]/), keys = text.match(/[\x1c\x1d]/g) ?? []
+    clearTimeout(heldTimer)
+    const incoming = typeof data === 'string' ? data : decoder.write(data)
+    const text = held + incoming
+    held = ''
+    const { parts, keys } = tokenize(text)
+    if (held) heldTimer = setTimeout(guard(() => { const rest = held; held = ''; if (rest) child.write(rest) }), 50)
     for (let i = 0; i < parts.length; i++) {
       if (i && keys[i - 1] === '\x1c') { expanded = !expanded; draw() }
       else if (i) {
@@ -224,6 +259,7 @@ export async function runHud({ cwd = process.cwd(), args = [], input = process.s
   } finally {
     rmSync(marker, { force: true })
     if (timer) clearInterval(timer)
+    clearTimeout(heldTimer)
     output.off('resize', onResize)
     output.off('error', onOutputError)
     input.off('data', forward)
