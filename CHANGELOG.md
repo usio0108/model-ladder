@@ -6,6 +6,9 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-11-10
+
+- The Codex SessionStart hook now has a `statusMessage` ("Loading model-ladder..."), so `/hooks` no longer lists it as an unnamed hook. On Windows it also shows the user a `systemMessage` about the background `node-pty` install: an installing notice with the `npm-ci.log` path, and a one-time ready notice per plugin version.
 - The Codex runner reads the usage sample before the clock at each forecast boundary. A sample taken a millisecond later counted as from the future, so the usage-risk question was occasionally skipped.
 
 ## [1.2.1] - 2026-11-10

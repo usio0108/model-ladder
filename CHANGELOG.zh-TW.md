@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-11-10
+
+- Codex SessionStart hook 加上 `statusMessage`（"Loading model-ladder..."），`/hooks` 不再顯示為 Unnamed hook。Windows 上也會以 `systemMessage` 告知使用者 `node-pty` 背景安裝狀態：安裝中時附上 `npm-ci.log` 路徑，就緒時每個外掛版本只顯示一次。
 - Codex runner 在每個預估邊界改為先讀用量樣本、再取時間。原本樣本若晚 1 毫秒取得會被視為來自未來而捨棄，導致偶爾跳過用量風險確認。
 
 ## [1.2.1] - 2026-11-10

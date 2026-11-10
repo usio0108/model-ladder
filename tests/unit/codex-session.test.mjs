@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { sessionText } from '../../hooks/codex-session.mjs'
+import { sessionText, sessionOutput } from '../../hooks/codex-session.mjs'
 import { artifactDir } from '../../scripts/common.mjs'
 
 // Never touch the real PowerShell profile from a test.
@@ -99,6 +99,56 @@ test('session leaves internal roles and an already running HUD out of the takeov
       assert.doesNotMatch(sessionText({ cwd }, {}, { ...stubs(result), platform: 'win32' }), /new PowerShell window/)
     }
   } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+test('Codex SessionStart hook is named with a statusMessage', () => {
+  const hooks = JSON.parse(readFileSync(new URL('../../hooks/codex-hooks.json', import.meta.url)))
+  assert.equal(hooks.hooks.SessionStart[0].hooks[0].statusMessage, 'Loading model-ladder...')
+})
+
+function npmCase(fn) {
+  const root = mkdtempSync(join(tmpdir(), 'ml-session-root-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'ml-session-'))
+  try { fn(root, cwd) } finally {
+    rmSync(artifactDir(root), { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true })
+    rmSync(cwd, { recursive: true, force: true })
+  }
+}
+
+test('session shows an install notice with the log path while node-pty installs', () => {
+  npmCase((root, cwd) => {
+    for (const npm of ['started', 'running']) {
+      const deps = { ...stubs({ status: 'unchanged', changed: false, npm }), platform: 'win32', pluginRoot: root }
+      const { systemMessage } = sessionOutput({ cwd }, {}, deps)
+      assert.match(systemMessage, /installing node-pty in the background; when it finishes, open a new PowerShell window and run codex\./)
+      assert.ok(systemMessage.includes(join(artifactDir(root), 'npm-ci.log')))
+    }
+  })
+})
+
+test('session announces node-pty readiness only once', () => {
+  npmCase((root, cwd) => {
+    const deps = { ...stubs({ status: 'unchanged', changed: false, npm: 'present' }), platform: 'win32', pluginRoot: root }
+    assert.match(sessionOutput({ cwd }, {}, deps).systemMessage, /model-ladder HUD is ready: open a new PowerShell window and run codex\./)
+    assert.equal(sessionOutput({ cwd }, {}, deps).systemMessage, '')
+  })
+})
+
+test('session shows no npm notice in a HUD, off win32 or for other npm states', () => {
+  npmCase((root, cwd) => {
+    for (const npm of ['started', 'running', 'present']) {
+      const result = { status: 'unchanged', changed: false, npm }
+      assert.equal(sessionOutput({ cwd }, { MODEL_LADDER_HUD: '1' }, { ...stubs(result), platform: 'win32', pluginRoot: root }).systemMessage, '')
+      assert.equal(sessionOutput({ cwd }, {}, { ...stubs(result), platform: 'linux', pluginRoot: root }).systemMessage, '')
+    }
+    for (const npm of ['skipped', 'error']) {
+      assert.equal(sessionOutput({ cwd }, {}, { ...stubs({ status: 'unchanged', changed: false, npm }), platform: 'win32', pluginRoot: root }).systemMessage, '')
+    }
+    const both = sessionOutput({ cwd }, {}, { ...stubs({ status: 'installed', changed: true, npm: 'started' }), platform: 'win32', pluginRoot: root })
+    assert.match(both.context, /next `codex` you launch/)
+    assert.match(both.systemMessage, /installing node-pty/)
+  })
 })
 
 test('session takeover follows the user config only and survives setup failures', () => {
