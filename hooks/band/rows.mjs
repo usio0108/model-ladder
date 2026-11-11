@@ -26,12 +26,17 @@ export const removeBackground = (list, ids) => list.filter((t) => !ids.includes(
 // Heuristic and limits: the plugin runtime gives turn.complete only the turn's last reply text (answer), with no flag for
 // "Claude is waiting on a task". So a reply counts as waiting when it is empty or unreadable, or mentions waiting, a
 // background run or a later notification (English or Chinese keywords below). Anything uncertain is shown. A final answer
-// that happens to use those words keeps its rows visible until the task ends; a wait phrased in other words is hidden.
-const WAITING = /wait|pending|in progress|in the background|background|still running|running|notif|will (let you know|report|check|get back)|once (it|they) (finish|complete)|等|稍後|稍后|背景|後台|后台|通知|進行中|进行中|執行中|执行中|完成後|完成后/i
+// that happens to use those words keeps its rows visible until the task ends; a wait phrased in other words is hidden
+// until a later reply waits (showAll).
+const WAITING = /wait|pending|in progress|in the background|background|still running|running|notif|will (let you know|report|check|get back)|once (it|they) (finish|complete)|等|稍後|稍后|背景|後台|后台|通知|進行中|进行中|執行中|执行中|完成後|完成后|回報|回报|跑完|重跑/i
 export const isWaitingAnswer = (answer) => typeof answer !== 'string' || !answer.trim() || WAITING.test(answer)
 
 // Sets answered on every task of one question.
 export const markAnswered = (list, question, answered) => list.map((t) => (t.question === question && Boolean(t.answered) !== answered ? { ...t, answered } : t))
+
+// A turn that ends waiting shows every task still in the list, whatever question started it: an earlier question's task
+// hidden by a final answer the heuristic misread comes back once a later reply says Claude is waiting.
+export const showAll = (list) => (list.some((t) => t.answered) ? list.map((t) => (t.answered ? { ...t, answered: false } : t)) : list)
 
 // They show only for work the screen does not otherwise show: not while the main session runs a turn, and not while a
 // ladder agent runs; and not for a task whose question already has its final answer.

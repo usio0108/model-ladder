@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { isWaitingAnswer } from './rows.mjs'
 
 for (const scenario of [
   { name: 'matching project', instructions: 'model-ladder: use ponytail when coding\nother: wrong project', project: 'model-ladder', root: '/repos/model-ladder', expected: 'model-ladder: ponytail / coding' },
@@ -480,6 +481,31 @@ test('background rows follow their question: a final answer hides them, a waitin
   await notify($, ['bg-2'])
   expect(await shows('shell: npm run second')).toBe(false)
   expect(await shows('shell: npm run watch')).toBe(true)
+})
+
+test('a later waiting reply brings back an earlier question task that a misread reply hid', async ($, on) => {
+  const { mount } = await mountBackground($, on)
+  on('turn.complete', () => ({ text: '' }))
+  const shows = async (text: string) => {
+    const ui = await mount(false)
+    const found = await ui.find({ type: 'Text', text })
+    await ui.unmount()
+    return found !== undefined
+  }
+  // Question A starts the test run; its reply says it will report back in words the heuristic missed before.
+  await $.prompt.submit({ text: '所以你還在跑對吧' })
+  await $.tool.call({ tool: 'Bash', command: 'mvn test', run_in_background: true })
+  await $.turn.complete({ durationMs: 1000, answer: 'Rerun started.' })
+  expect(await shows('shell: mvn test')).toBe(false)
+  // Question B asks about it and the reply waits: question A's task shows again.
+  await $.prompt.submit({ text: '跑完了?' })
+  await $.turn.complete({ durationMs: 1000, answer: '還沒，跑完會收到通知。' })
+  expect(await shows('shell: mvn test')).toBe(true)
+})
+
+test('replies that say they will report back or rerun count as waiting', async () => {
+  for (const answer of ['wt328 的測試在重跑，重跑完我會回報結果', '跑完我再跟你說', '结果出来我会回报']) expect(isWaitingAnswer(answer)).toBe(true)
+  expect(isWaitingAnswer('Here is the other answer.')).toBe(false)
 })
 
 test('a task-notification is not a new question and brings its question tasks back until that turn ends', async ($, on) => {

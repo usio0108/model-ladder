@@ -4,7 +4,7 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { Background, Row } from './types'
 import { roundSpan } from './remaining.mjs'
 import { formatContext } from './context.mjs'
-import { activityText, addBackground, isWaitingAnswer, markAnswered, medianDuration, recordDuration, addRow, agentExpected, agentSamples, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount } from './rows.mjs'
+import { activityText, addBackground, isWaitingAnswer, markAnswered, medianDuration, recordDuration, addRow, agentExpected, agentSamples, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount, showAll } from './rows.mjs'
 import { GUARD_DEFAULT, mergeConfig, parseThreshold, pluginLayer, projectPins, projectSkills, setGuard, userConfigPath } from '../config-layers.mjs'
 import { displayWidth, panelTitle } from '../../scripts/panel-title.mjs'
 
@@ -392,10 +392,11 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) await update($, background, (l) => removeBackground(l, [e.agentId!]))
     else {
-      // The main session's turn ended: if its last reply is a final answer (not waiting), this question's tasks hide.
-      const answered = !isWaitingAnswer((e as { answer?: unknown }).answer)
+      // The main session's turn ended: a final answer (not waiting) hides this question's tasks; a waiting reply shows
+      // every task still running, including an earlier question's that an earlier reply hid.
+      const waiting = isWaitingAnswer((e as { answer?: unknown }).answer)
       const turnQuestion = question
-      await update($, background, (l) => markAnswered(l, turnQuestion, answered)).catch(() => undefined)
+      await update($, background, (l) => (waiting ? showAll(l) : markAnswered(l, turnQuestion, true))).catch(() => undefined)
     }
     const finished = e.agentId ? (await read($, rows)).find((r) => r.id === e.agentId) : undefined
     if (e.agentId && finished) {

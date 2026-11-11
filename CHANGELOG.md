@@ -6,6 +6,8 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+- **Claude band background rows** no longer stay hidden while their task still runs. A reply that waits on the background now shows every task still running, not only the current question's, so a task hidden because an earlier reply was misread as a final answer comes back (for example a background test whose question was answered with "I'll report back when the rerun finishes", then a later "you'll get a notification when it's done"). The waiting keywords also cover `回報`, `回报`, `跑完` and `重跑`.
+
 ## [1.2.3] - 2026-11-10
 
 - The Codex HUD now recognizes Ctrl+\ and Ctrl+] sent as Windows Terminal win32-input-mode sequences (`ESC [ Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`), which ConPTY switches on. Before, the keys never matched the raw 0x1c/0x1d bytes and went to Codex. Both the press and release sequences are now dropped from forwarded input, an action fires once per press, sequences split across reads are reassembled, and all other input is forwarded unchanged.
