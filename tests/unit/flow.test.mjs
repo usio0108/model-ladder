@@ -693,20 +693,36 @@ test('the verify prompt with a verify command requires ACCEPTANCE and explains w
 
 const refused = 'Refusing to use C:\\repo\\.claude\\worktrees\\wf_1 as an isolation worktree: git could not be run to resolve it, so its git identity could not be verified. Isolation is refused rather than assumed — recreate the worktree (or remove the corrupt .git entry) and retry.'
 
-test('an isolation worktree refusal retries the worker once with the same model and effort, without diagnosis', async () => {
+test('an isolation worktree refusal reruns the worker once in a worktree it creates itself, without diagnosis', async () => {
   const { out, calls } = await runWith([
     { label: 'worker', throws: refused },
     { label: 'worker', result: done }, { label: 'verify', result: pass },
-  ])
+  ], { runId: 'claude-112533bb-c0fa', baseCommit: 'abc123' })
   assert.equal(out.status, 'VERIFIED')
   assert.equal(out.attempts.length, 1)
   assert.deepEqual(calls.map((c) => c.label.split(' ')[0]), ['worker', 'worker', 'verify'])
   assert.equal(`${calls[1].model}/${calls[1].effort}`, 'haiku/low')
-  assert.equal(calls[1].isolation, 'worktree')
+  assert.equal(calls[0].isolation, 'worktree')
+  assert.equal(calls[1].isolation, undefined, 'no host isolation after a refusal')
   assert.equal(calls[1].agentType, 'model-ladder:worker')
-  assert.equal(calls[1].prompt, calls[0].prompt)
+  assert.doesNotMatch(calls[0].prompt, /OWN WORKTREE/)
+  assert.match(calls[1].prompt, /OWN WORKTREE/)
+  assert.match(calls[1].prompt, /git -C "ROOT" worktree add --detach "ROOT\/\.claude\/worktrees\/ladder-112533bb-1" abc123/)
+  assert.doesNotMatch(calls[1].prompt, /git reset -q --hard/, 'an own worktree already starts at baseCommit')
   assert.equal(out.attempts[0].tokens, 30, 'both worker runs and the verifier count')
   assert.equal(out.tokens, 30)
+})
+
+test('after a refusal, later attempts create their own worktree without asking the host again', async () => {
+  const { calls } = await runWith([
+    { label: 'worker', throws: refused },
+    { label: 'worker', result: done }, { label: 'verify', result: fail },
+    { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
+    { label: 'worker', result: done }, { label: 'verify', result: pass },
+  ], { runId: 'claude-112533bb-c0fa', setupPatch: '/run/setup.patch' })
+  assert.equal(calls[4].isolation, undefined)
+  assert.match(calls[4].prompt, /ladder-112533bb-2/)
+  assert.match(calls[4].prompt, /SETUP \(do this first, in order, inside WT\)\n  git apply --whitespace=nowarn "\/run\/setup\.patch"/)
 })
 
 test('the refusal also retries a test-writer, and a refusal returned as text counts', async () => {

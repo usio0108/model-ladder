@@ -6,7 +6,8 @@ import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:
 import { tmpdir } from 'node:os'
 import { EventEmitter } from 'node:events'
 const pty = { spawn() { throw new Error('spawn not mocked') } }
-import { createSessionFinder, hudText, parseArgs, runHud, windowsCommand } from '../../scripts/codex-hud.mjs'
+import { createSessionFinder, hudText, parseArgs, runHud, shownRun, windowsCommand } from '../../scripts/codex-hud.mjs'
+import { registerRun, unregisterRun } from '../../scripts/usage-guard.mjs'
 import { guardHandoff, HANDOFF_PROMPT } from '../../scripts/codex-guard-handoff.mjs'
 import { artifactDir } from '../../scripts/common.mjs'
 import { panelTitle } from '../../scripts/panel-title.mjs'
@@ -14,6 +15,33 @@ import { panelTitle } from '../../scripts/panel-title.mjs'
 test('panel title accepts only a valid packaged manifest version', () => {
   assert.equal(panelTitle('{"version":"1.2.3"}'), 'model-ladder (v1.2.3)')
   for (const manifest of ['', '{', '{"version":"not-a-version"}', '{"version":1}']) assert.equal(panelTitle(manifest), 'model-ladder')
+})
+
+test('HUD shows its own run first, else a running Codex run in another repository, named by its folder', () => {
+  const base = mkdtempSync(join(tmpdir(), 'ml-hud-shown-'))
+  const repo = (name, runId, live) => {
+    const root = join(base, name)
+    mkdirSync(join(root, '.model-ladder', 'runs'), { recursive: true })
+    writeFileSync(join(root, '.model-ladder', 'live.json'), JSON.stringify({ runId, task: `${name} task`, agents: [], ...live }))
+    writeFileSync(join(root, '.model-ladder', 'runs', `${runId}.json`), JSON.stringify({ runId, pid: process.pid }))
+    return root
+  }
+  try {
+    const own = join(base, 'own')
+    mkdirSync(own)
+    const bench = repo('benchmark-builder', 'codex-b', {})
+    const finished = repo('finished', 'codex-f', { result: { status: 'VERIFIED' } })
+    assert.equal(shownRun(own).running, false, 'nothing registered')
+    registerRun({ runId: 'codex-f', pid: process.pid, root: finished, runtime: 'codex' })
+    registerRun({ runId: 'codex-b', pid: process.pid, root: bench, runtime: 'codex' })
+    assert.deepEqual([shownRun(own).running, shownRun(own).live.task], [true, 'benchmark-builder: benchmark-builder task'])
+    repo('own', 'codex-o', {})
+    assert.equal(shownRun(own).live.task, 'own task', 'the own repository wins')
+    assert.equal(shownRun(bench).live.task, 'benchmark-builder task', 'no prefix in the run\'s own repository')
+  } finally {
+    for (const id of ['codex-b', 'codex-f']) unregisterRun(id)
+    rmSync(base, { recursive: true, force: true })
+  }
 })
 
 test('HUD reports the active role, model/effort and state from live.json', () => {
@@ -58,7 +86,7 @@ test('HUD shows usage, guard and active work, then hides an old result', () => {
     const text = hudText(state, 100, { now, color: true })
     assert.match(text, /\x1b\[33m55%\x1b\[0m/)
     assert.match(text, /\x1b\[31m95%\x1b\[0m/)
-    assert.match(text, /G:on.*\^\] handoff/)
+    assert.match(text, /G:on.*\^\]\/Alt\+H handoff/)
     assert.match(text, /m\/low.*2m.*Command: test/)
     assert.match(hudText({ ...state, context: { tokens: 50, window: 100 } }, 120, { now }), /ctx 50\/100 \(50%\)/)
     process.env.NO_COLOR = '1'
@@ -481,6 +509,22 @@ test('win32-input-mode Ctrl+] triggers the handoff and is not forwarded', async 
   await done()
 })
 
+test('Alt+H also writes the handoff, as ESC h and in win32-input-mode; AltGr+H and a lone ESC do not', async (t) => {
+  const { h, cwd, forwarded, done } = await win32Harness(t, 'alt-h')
+  const handoff = join(cwd, '.model-ladder', 'HANDOFF.md')
+  h.input.emit('data', Buffer.from('\x1bh'))
+  assert.ok(existsSync(handoff), 'ESC h, as VS Code sends Alt+H')
+  rmSync(handoff)
+  h.input.emit('data', Buffer.from(win32(72, 104, 1, 0x02) + win32(72, 104, 0, 0x02)))
+  assert.ok(existsSync(handoff), 'win32-input-mode Left Alt+H')
+  rmSync(handoff)
+  h.input.emit('data', Buffer.from(win32(72, 104, 1, 0x0a)))
+  h.input.emit('data', Buffer.from('\x1b'))
+  assert.ok(!existsSync(handoff), 'Ctrl+Alt (AltGr) and a lone ESC are not the handoff key')
+  assert.deepEqual(forwarded, [win32(72, 104, 1, 0x0a), '\x1b'])
+  await done()
+})
+
 test('win32-input-mode Ctrl+\\ with no Unicode character is recognized by virtual key and Ctrl state only', async (t) => {
   const { h, forwarded, done } = await win32Harness(t, 'w32-vk')
   const before = h.calls.resize.length
@@ -533,7 +577,7 @@ test('HUD header hint offers ^\\ and drops it after ctx and the version on narro
     context: { tokens: 50, window: 100 },
     usage: { fiveHour: 33, fiveHourResetsAt: now / 1000 + 4 * 3600, sevenDay: 70, sevenDayResetsAt: now / 1000 + 2 * 86400 },
   }
-  assert.match(hudText(state, 140, { now }), /ctx.*\^\] handoff \^\\ expand/)
+  assert.match(hudText(state, 140, { now }), /ctx.*\^\]\/Alt\+H handoff \^\\ expand/)
   assert.match(hudText(state, 140, { now, expanded: true }), /\^\\ collapse/)
   const tight = hudText(state, 50, { now, expanded: true }).split('\n')[0]
   assert.match(tight, /4h\/5h 33%.*2d\/7d 70%/)

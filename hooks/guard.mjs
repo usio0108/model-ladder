@@ -67,8 +67,12 @@ export function check(input) {
   const merged = mergedProtection(mainRoot)
   if (!merged.active) return null
   const patterns = input.agent_type === WORKER ? [...merged.protected, ...merged.tests] : merged.protected
-  const root = canonical(git(input.cwd, 'rev-parse', '--show-toplevel'))
-  const rel = relative(root, canonical(isAbsolute(target) ? target : resolve(input.cwd, target)))
+  // Relative to the worktree that holds the file, not the agent's cwd: a worker in its own worktree starts in the main checkout.
+  const file = canonical(isAbsolute(target) ? target : resolve(input.cwd, target))
+  let dir = dirname(file)
+  while (!existsSync(dir) && dirname(dir) !== dir) dir = dirname(dir)
+  const root = canonical(git(dir, 'rev-parse', '--show-toplevel'))
+  const rel = relative(root, file)
   if (!isProtected(rel, patterns)) return null
   return `model-ladder: ${rel.replaceAll('\\', '/')} is protected during this run. Fix the code, not the tests.`
 }

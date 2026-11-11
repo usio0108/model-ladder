@@ -184,8 +184,9 @@ function guardStop(raw) {
 // Another agent would fail the same way until the reset, so the run stops and hands off. Independent of usageGuard.
 const HARD_LIMIT = /hit your (?:session |weekly |daily |opus |usage |5-hour )?limit|usage limit|rate[ _-]?limit|limit reached|too many requests|out of (?:extra )?usage|\b429\b/i
 
-// Claude Code sometimes refuses a freshly created, healthy isolation worktree ("Refusing to use <path> as an
-// isolation worktree: git could not be run to resolve it ..."). The refusal is transient: a new worktree works.
+// Claude Code can refuse a healthy isolation worktree ("Refusing to use <path> as an isolation worktree: ..."):
+// sometimes transiently, and on some Windows sessions every time (it compares c:\ and C:/ as different paths).
+// After a refusal the run stops asking for host isolation; workers create their own worktree (brief's `own`).
 function isolationRefused(measurement) {
   return !measurement.limit && /Refusing to use\s[\s\S]*\sas an isolation worktree/i.test(measurement.error ?? '')
 }
@@ -321,7 +322,7 @@ async function callAgent(prompt, opts) {
     return { result: null, error, limit, tokens: budget.spent() - before }
   } catch (e) {
     const message = String(e?.message ?? e)
-    return { result: null, error: `failed: ${message.slice(0, 200)}`, limit: hardLimit(message), tokens: budget.spent() - before }
+    return { result: null, error: `failed: ${message.slice(0, 600)}`, limit: hardLimit(message), tokens: budget.spent() - before }
   }
 }
 
@@ -432,7 +433,8 @@ const skillsSection = (v) => {
   return `SKILL INSTRUCTIONS\n${v}\n\nInterpret these natural-language instructions in the context of your assigned task and role. Evaluate each condition first, then select only the applicable relevant skills, plugins, slash commands, MCP tools or other capabilities actually available to you. Existing name lists are requests to use those capabilities where relevant. A name may be a skill, a plugin name or an MCP server name (tools named mcp__<server>__*); map it to the matching available capability. Read selected skills' instructions and invoke them with the Skill tool, and call plugin, slash-command and MCP tools directly. If an applicable required capability cannot be found, report it explicitly as a blocker and list the available capabilities you checked; never invent names or claim to have used a capability you did not invoke. Stay within this role's scope, permissions, protected paths and verification rules, even if a capability asks for more. Verifiers only check and report; they never fix code. Never invoke model-ladder skills, workflows or runners, the Workflow tool, or other agents, recursively.`
 }
 
-function brief(plan, history, hint) {
+// own: the repo-relative path of a worktree the worker creates itself, when host isolation was refused.
+function brief(plan, history, hint, own = null) {
   const sections = [
     `GOAL\n  ${plan.goal}`,
     `TASK (as the user wrote it)\n  ${args.task}`,
@@ -445,15 +447,23 @@ function brief(plan, history, hint) {
     sections.push('READ-ONLY\n  You run in the user\'s own checkout, not a worktree. Do not create, modify or delete any file, and run no git command that changes state. Your summary is the deliverable: put the full report in it.')
   } else {
     sections.push(`FORBIDDEN\n  Do not create, modify or delete files matching: ${plan.protected.join(', ') || '(none)'}\n  Do not commit. Do not stage files (no \`git add\`). Do not touch files outside this worktree.`)
-    // The worktree is created from the remote default branch, not from the user's branch.
-    const setup = [`git reset -q --hard ${args.baseCommit}`]
+    if (own) {
+      sections.push(`OWN WORKTREE\n  Claude Code refused to isolate you, so you create your own worktree. You start in the user's own checkout: never create, modify or delete anything there.\n` +
+        `  1. In your starting directory run \`git rev-parse --show-toplevel\`; call its output ROOT.\n` +
+        `  2. Run \`git -C "ROOT" worktree add --detach "ROOT/${own}" ${args.baseCommit}\`; call ROOT/${own} WT.\n` +
+        `  From then on work only inside WT: start every shell command with \`cd "WT" && \`, and give Read, Edit and Write absolute paths under WT.`)
+    }
+    // A host worktree is created from the remote default branch, not from the user's branch; an own worktree already starts at baseCommit.
+    const setup = own ? [] : [`git reset -q --hard ${args.baseCommit}`]
     if (args.setupPatch) {
       setup.push(`git apply --whitespace=nowarn "${args.setupPatch}"`)
       // Staged, so the verifier's plain `git diff` shows only the worker's own changes.
       setup.push('git add -A')
     }
-    sections.push(`SETUP (do this first, in order)\n${setup.map((s) => `  ${s}`).join('\n')}\n  This moves the worktree to the user's current commit` +
-      (args.setupPatch ? ' and applies their uncommitted changes; build on them.' : '.'))
+    if (setup.length) {
+      sections.push(`SETUP (do this first, in order${own ? ', inside WT' : ''})\n${setup.map((s) => `  ${s}`).join('\n')}\n  This moves the worktree to the user's current commit` +
+        (args.setupPatch ? ' and applies their uncommitted changes; build on them.' : '.'))
+    }
   }
   if (history.length) {
     sections.push(`PREVIOUS ATTEMPTS (each started from a clean tree like yours; their code is gone)\n${bullets(history.map(summarize))}`)
@@ -546,18 +556,26 @@ async function run(plan) {
     tokens,
   })
 
+  // Set by the first host refusal and kept for the rest of the run; journal replay sets it again the same way.
+  let ownWorktrees = false
+  const runKey = String(args.runId ?? 'run').replace(/^[a-z]+-/, '').slice(0, 8)
+
   for (let n = 1; n <= config.maxAttempts; n++) {
     phase(`Attempt ${n}`)
-    const runWorker = () => measured(brief(plan, history, hint), {
-      label: `worker ${label(cell)}`, phase: `Attempt ${n}`, schema: workerSchema(),
-      agentType: workerType, ...(plan.readOnly ? {} : { isolation: 'worktree' }), ...cell,
-    })
+    const runWorker = () => {
+      const own = ownWorktrees && !plan.readOnly ? `.claude/worktrees/ladder-${runKey}-${n}` : null
+      return measured(brief(plan, history, hint, own), {
+        label: `worker ${label(cell)}`, phase: `Attempt ${n}`, schema: workerSchema(),
+        agentType: workerType, ...(plan.readOnly || own ? {} : { isolation: 'worktree' }), ...cell,
+      })
+    }
     let worker = await runWorker()
     let workerTokens = worker.tokens
-    // A transient host refusal of a healthy worktree: one more try with the same cell, no diagnosis, no escalation.
-    // A separate measured() call, so the boundary and journal replay still allow one agent per Workflow call.
-    if (isolationRefused(worker)) {
-      log(`#${n} ${label(cell)}: isolation worktree refused; retrying once with the same model and effort`)
+    // A host refusal of a healthy worktree: the same cell again, in a worktree the worker creates itself; no diagnosis,
+    // no escalation. A separate measured() call, so the boundary and journal replay still allow one agent per Workflow call.
+    if (!ownWorktrees && isolationRefused(worker)) {
+      log(`#${n} ${label(cell)}: isolation worktree refused; the worker creates its own worktree from now on`)
+      ownWorktrees = true
       worker = await runWorker()
       workerTokens += worker.tokens
     }

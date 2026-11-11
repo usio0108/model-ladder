@@ -6,6 +6,12 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+## [1.2.5] - 2026-11-11
+
+- When Claude Code refuses a worker's isolation worktree, the worker now creates its own worktree with `git worktree add --detach` under `.claude/worktrees/` and works only there, for that attempt and every later one in the run. Retrying host isolation did not help on Windows sessions where Claude Code compares `c:\` and `C:/` as different paths and refuses every worktree. The protected-path hook now resolves paths against the worktree that holds the file, so it still applies when the worker starts in the main checkout. Worker errors keep 600 characters instead of 200, so a refusal shows both paths.
+- The Codex HUD also accepts Alt+H for the handoff. With an IME such as Bopomofo, Ctrl+] arrives as `】` even in the IME's English mode, so the HUD could not see it; Alt+H arrives as `ESC h` (or a win32-input-mode Alt+H) and is not forwarded to Codex. Ctrl+Alt+H (AltGr) is still a character. The header hint reads `^]/Alt+H handoff`.
+- The Codex HUD now shows a run that Codex started in another repository, for example a scratch repository under the temp directory, when its own repository has no run. It reads the machine-wide registry of running runners and puts that repository's folder name in front of the task. Before, the HUD showed `idle` for the whole run.
+
 ## [1.2.4] - 2026-11-11
 
 - The Codex HUD now finds the session itself. Interactive Codex runs the SessionStart hook in the shared `codex app-server` daemon with the daemon's environment, so the HUD token never reached the hook, no marker was written, and the HUD showed "Session hook not detected" with no context usage. The HUD now falls back to the newest `codex-tui` rollout under `$CODEX_HOME/sessions` for the same folder that started after the HUD did, rescans every 3 s at most, and switches to a newer rollout after `/new` or `/resume`. It reads the whole first line, which is about 19 KB in real rollouts.

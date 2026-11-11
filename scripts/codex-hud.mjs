@@ -2,7 +2,7 @@ import { execFileSync, spawn as nodeSpawn } from 'node:child_process'
 import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { extname, isAbsolute, join, resolve } from 'node:path'
+import { basename, extname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { StringDecoder } from 'node:string_decoder'
 import { displayWidth, renderLive, truncate, visibleAgents } from './codex-live.mjs'
@@ -10,9 +10,10 @@ import { formatContext } from '../hooks/band/context.mjs'
 import { readCodexContext, readCodexUsage } from './codex-usage.mjs'
 import { configureGuard } from './watch.mjs'
 import { writeHandoff } from './codex-handoff.mjs'
-import { artifactDir } from './common.mjs'
+import { artifactDir, samePath } from './common.mjs'
 import { guardHandoff } from './codex-guard-handoff.mjs'
 import { readLocks } from './runs.mjs'
+import { activeRuns } from './usage-guard.mjs'
 
 const HUD_ROWS = 2
 
@@ -44,7 +45,7 @@ export function hudText(state, width = 80, { now = Date.now(), guard = { enabled
   const context = state?.context
   const ctx = ` · ${formatContext(state?.context) || 'ctx ?'}`
   const tail = notice ? ` · ${notice}` : ''
-  const keys = ` · G:${guard.enabled ? 'on' : 'off'} ^] handoff ^\\ ${expanded ? 'collapse' : 'expand'}`
+  const keys = ` · G:${guard.enabled ? 'on' : 'off'} ^]/Alt+H handoff ^\\ ${expanded ? 'collapse' : 'expand'}`
   // Usage stays whole: the context goes first, then renderLive drops the version, and the key hints go last.
   const whole = (text) => displayWidth(text) <= width && !renderLive(base, { width: Math.max(0, width - displayWidth(text)), now, guard }).split('\n')[0].trimEnd().endsWith('…')
   // The notice outranks the hints: when even the notice alone is too long it is truncated, never dropped.
@@ -126,6 +127,21 @@ function readLive(cwd) {
   catch { return undefined }
 }
 
+const isRunning = (root, live) => Boolean(live?.runId && !live.result && readLocks(root).some((lock) => lock.runId === live.runId && !lock.stale))
+
+// The HUD's own repository first. Without a run there, a Codex run in another repository (Codex can start one
+// anywhere, for example in a scratch repo), with that repository's folder name in front of the task.
+export function shownRun(cwd) {
+  const own = readLive(cwd)
+  if (isRunning(cwd, own)) return { live: own, running: true }
+  for (const entry of activeRuns()) {
+    if (entry.runtime !== 'codex' || typeof entry.root !== 'string' || samePath(entry.root, cwd)) continue
+    const other = readLive(entry.root)
+    if (other?.runId === entry.runId && isRunning(entry.root, other)) return { live: { ...other, task: `${basename(entry.root)}: ${other.task}` }, running: true }
+  }
+  return { live: own, running: false }
+}
+
 function terminalSize(output) {
   return { columns: Math.max(1, output.columns || 80), rows: Math.max(1, output.rows || 24) }
 }
@@ -201,9 +217,8 @@ export async function runHud({ cwd = process.cwd(), args = [], input = process.s
   }
   const draw = () => {
     if (pending) return
-    const live = readLive(cwd)
-    const running = Boolean(live?.runId && !live.result && readLocks(cwd).some((lock) => lock.runId === live.runId && !lock.stale))
-    const state = live && !running && !live.result ? { ...live, agents: Array.isArray(live.agents) ? live.agents.filter((agent) => agent?.endedAt) : [] } : live
+    const { live, running } = shownRun(cwd)
+    const state =live && !running && !live.result ? { ...live, agents: Array.isArray(live.agents) ? live.agents.filter((agent) => agent?.endedAt) : [] } : live
     const guardConfig = configureGuard(cwd, {})
     if (Date.now() - usageAt >= 5000) {
       usage = readCodexUsage(undefined, undefined, { details: true, resets: true }); usageAt = Date.now()
@@ -252,12 +267,16 @@ export async function runHud({ cwd = process.cwd(), args = [], input = process.s
     for (let i = 0; i < text.length; i++) {
       const ch = text[i]
       if (ch === '\x1c' || ch === '\x1d') { keys.push(ch); parts.push(''); continue }
+      // Alt+H is the handoff key that survives an IME: Bopomofo turns Ctrl+] into 】 even in its English mode.
+      if (ch === '\x1b' && (text[i + 1] === 'h' || text[i + 1] === 'H')) { keys.push('\x1d'); parts.push(''); i++; continue }
       if (ch === '\x1b' && text[i + 1] === '[') {
         win32Key.lastIndex = i
         const m = win32Key.exec(text)
         if (m) {
           const [vk, , uc, kd, cs] = m.slice(1).map(Number)
-          const key = uc === 28 || (uc === 0 && vk === 220 && cs & 0x0c) ? '\x1c' : uc === 29 || (uc === 0 && vk === 221 && cs & 0x0c) ? '\x1d' : ''
+          // Alt is cs & 0x03 and Ctrl cs & 0x0c; Ctrl+Alt is AltGr, a character, not Alt+H.
+          const altH = vk === 72 && cs & 0x03 && !(cs & 0x0c)
+          const key = uc === 28 || (uc === 0 && vk === 220 && cs & 0x0c) ? '\x1c' : uc === 29 || (uc === 0 && vk === 221 && cs & 0x0c) || altH ? '\x1d' : ''
           if (key) {
             if (kd === 1) { keys.push(key); parts.push('') }
             i += m[0].length - 1

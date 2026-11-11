@@ -176,8 +176,9 @@ function guardStop(raw) {
 // Another agent would fail the same way until the reset, so the run stops and hands off. Independent of usageGuard.
 const HARD_LIMIT = /hit your (?:session |weekly |daily |opus |usage |5-hour )?limit|usage limit|rate[ _-]?limit|limit reached|too many requests|out of (?:extra )?usage|\b429\b/i
 
-// Claude Code sometimes refuses a freshly created, healthy isolation worktree ("Refusing to use <path> as an
-// isolation worktree: git could not be run to resolve it ..."). The refusal is transient: a new worktree works.
+// Claude Code can refuse a healthy isolation worktree ("Refusing to use <path> as an isolation worktree: ..."):
+// sometimes transiently, and on some Windows sessions every time (it compares c:\ and C:/ as different paths).
+// After a refusal the run stops asking for host isolation; workers create their own worktree (brief's `own`).
 function isolationRefused(measurement) {
   return !measurement.limit && /Refusing to use\s[\s\S]*\sas an isolation worktree/i.test(measurement.error ?? '')
 }

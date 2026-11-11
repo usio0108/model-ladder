@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [1.2.5] - 2026-11-11
+
+- Claude Code 拒絕 worker 的隔離 worktree 時，worker 現在會自己用 `git worktree add --detach` 在 `.claude/worktrees/` 下建立 worktree，並只在其中工作；該次及同一 run 之後的每次 attempt 都如此。部分 Windows session 中 Claude Code 會把 `c:\` 與 `C:/` 當成不同路徑而拒絕每個 worktree，重試隔離沒有用。受保護路徑 hook 現在依檔案所在的 worktree 判斷路徑，所以 worker 從主 checkout 起步時仍然有效。worker 錯誤訊息保留 600 字（原為 200 字），被拒時能看到兩個路徑。
+- Codex HUD 也接受 Alt+H 觸發交接。使用注音等輸入法時，即使在輸入法的英文模式，Ctrl+] 也會變成 `】`，HUD 無法辨識；Alt+H 送出的是 `ESC h`（或 win32-input-mode 的 Alt+H），不會轉給 Codex。Ctrl+Alt+H（AltGr）仍是一般字元。標題列提示改為 `^]/Alt+H handoff`。
+- 自己的 repo 沒有 run 時，Codex HUD 現在會顯示 Codex 在其他 repo 啟動的 run（例如暫存目錄下的 scratch repo）。HUD 讀取全機共用的執行中 runner 登記，並在 task 前加上該 repo 的資料夾名稱。先前整個 run 期間 HUD 都顯示 `idle`。
+
 ## [1.2.4] - 2026-11-11
 
 - Codex HUD 現在會自己找出 session。互動式 Codex 是在共用的 `codex app-server` daemon 中，以 daemon 的環境執行 SessionStart hook，所以 HUD 的 token 傳不到 hook，也就不會寫出 marker，HUD 因此一直顯示「Session hook not detected」，也沒有 context 用量。現在 HUD 會改找 `$CODEX_HOME/sessions` 下同一資料夾、在 HUD 啟動之後才開始的最新 `codex-tui` rollout。HUD 最多每 3 秒重新掃描一次，`/new` 或 `/resume` 之後會切換到較新的 rollout。HUD 會讀完整的第一行，實際 rollout 的第一行約 19 KB。
