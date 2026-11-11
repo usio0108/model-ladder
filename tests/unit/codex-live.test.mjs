@@ -143,6 +143,13 @@ test('watch flags write the user file, preserve its other settings and leave the
       assert.match(result.stderr, /threshold/)
       assert.equal(readFileSync(path, 'utf8'), before)
     }
+    const set = spawnSync(process.execPath, [fileURLToPath(new URL('../../scripts/watch.mjs', import.meta.url)), '--cwd', root, '--threshold', '80', '--set'], { encoding: 'utf8', timeout: 10000 })
+    assert.equal(set.status, 0, '--set exits instead of watching')
+    assert.equal(set.stdout, 'Usage guard off, threshold 80%\n')
+    assert.equal(JSON.parse(readFileSync(path)).usageGuard.threshold, 80)
+    const bare = spawnSync(process.execPath, [fileURLToPath(new URL('../../scripts/watch.mjs', import.meta.url)), '--cwd', root, '--set'], { encoding: 'utf8', timeout: 10000 })
+    assert.equal(bare.status, 1)
+    assert.match(bare.stderr, /--set needs/)
     for (const value of ['1', '100', '90.5']) assert.equal(parseArgs(['--threshold', value]).threshold, Number(value))
     assert.throws(() => parseArgs(['--guard', 'yes']), /on or off/)
     assert.throws(() => parseArgs(['--threshold']), /requires/)

@@ -14,6 +14,7 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i]
     if (flag === '--handoff') { options.handoff = true; continue }
+    if (flag === '--set') { options.set = true; continue }
     if (flag === '--help' || flag === '-h') { options.help = true; continue }
     if (!['--guard', '--threshold', '--cwd'].includes(flag)) throw new Error(`Unknown argument: ${flag}`)
     const value = argv[++i]
@@ -50,6 +51,14 @@ export function configureGuard(root, options) {
 const pinned = (root, field) => projectPins(readLayers(root, 'codex').project, field)
   ? ` (saved to ${userConfigPath('codex')}, but .codex/model-ladder.json sets usageGuard.${field} for this project and wins)`
   : ''
+// `watch.mjs --set`: what Codex runs when the person asks in chat to change the guard. Saves, then reports the guard
+// in effect here, which a project pin can override.
+export function setGuard(cwd, options) {
+  if (options.enabled === undefined && options.threshold === undefined) throw new Error('--set needs --guard on|off or --threshold 1-100')
+  const guard = configureGuard(cwd, options)
+  const notes = [...(options.enabled !== undefined ? [pinned(cwd, 'enabled')] : []), ...(options.threshold !== undefined ? [pinned(cwd, 'threshold')] : [])].filter(Boolean)
+  return `Usage guard ${guard.enabled ? 'on' : 'off'}, threshold ${guard.threshold}%${notes.join('')}`
+}
 export function panelCommand(cwd, command) {
   const words = command.trim().split(/\s+/)
   if (words[0] === 'h' && words.length === 1) return `Handoff: ${writeHandoff(cwd)}. Use the handoff skill in Codex to add conversation context.`
@@ -98,8 +107,9 @@ export function watch({ cwd = process.cwd(), output = process.stdout, input = pr
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const options = parseArgs(process.argv.slice(2))
-    if (options.help) process.stdout.write('Usage: node watch.mjs [--cwd <repo-root>] [--guard on|off] [--threshold 1–100] [--handoff]\n--guard and --threshold are saved to your own ~/.codex/model-ladder.json (not the project file) before watching. Ctrl-C stops the watcher.\n')
+    if (options.help) process.stdout.write('Usage: node watch.mjs [--cwd <repo-root>] [--guard on|off] [--threshold 1–100] [--set] [--handoff]\n--guard and --threshold are saved to your own ~/.codex/model-ladder.json (not the project file) before watching. --set saves them and exits instead of watching. Ctrl-C stops the watcher.\n')
     else if (options.handoff) process.stdout.write(`${writeHandoff(options.cwd)}\n`)
+    else if (options.set) process.stdout.write(`${setGuard(options.cwd, options)}\n`)
     else { configureGuard(options.cwd, options); watch(options) }
   } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1 }
 }

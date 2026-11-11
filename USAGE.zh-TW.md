@@ -167,7 +167,7 @@ Claude 外掛角色指示作為預設，專案同名鍵可覆蓋，空字串也�
 | Claude 交接 | `handoff now` 先寫模板，再於 session 閒置時執行 `/model-ladder:handoff`。usage guard 開啟時，用量視窗達到門檻也會自動執行一次。 |
 | 交接備案 | 提交失敗時 toast 顯示指令，模板仍可使用。 |
 | Codex 控制 | 輸入 `g`、`t 90`、`h` 或 `q` 後按 Enter。 |
-| CLI 控制 | `watch.mjs` 接受 `--guard on|off`、`--threshold 1-100`、`--handoff`。 |
+| CLI 控制 | `watch.mjs` 接受 `--guard on|off`、`--threshold 1-100`、`--handoff`；加上 `--set` 只儲存、不開 watch。在 Codex 也可以直接說，例如「把 model-ladder 的 threshold 改成 80」。 |
 
 手動交接不會取消 run。
 Codex 沒有 autorun 或 panel 時，確認外掛已啟用、重新啟動 session，並在 `/hooks` 檢閱與信任 hooks。

@@ -6,6 +6,8 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+- In Codex you can change the usage guard by asking, for example "set the model-ladder threshold to 80" or "turn the usage guard off". The Codex skill runs the new `watch.mjs --set`, which saves `--threshold` and `--guard` to your own `~/.codex/model-ladder.json` and exits instead of opening the watcher, and reports the guard in effect, including a note when the project file overrides it.
+
 ## [1.2.6] - 2026-11-11
 
 - A refused isolation worktree no longer ends the Workflow call. In 1.2.5 the refusal returned a boundary, and the worker created its own worktree only on the next call; a main session that stopped at that boundary never got there, so runs still failed on sessions where Claude Code refuses every worktree. The refused agent never started, so it is no longer journaled or counted as the call's agent, and the own-worktree rerun follows in the same call.

@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+- 在 Codex 可以直接用說的改用量守門，例如「把 model-ladder 的 threshold 改成 80」或「關掉 usage guard」。Codex skill 會執行新的 `watch.mjs --set`：把 `--threshold` 與 `--guard` 存到你自己的 `~/.codex/model-ladder.json` 後直接結束，不開 watch，並回報目前生效的設定；若專案設定檔覆蓋了該值也會註明。
+
 ## [1.2.6] - 2026-11-11
 
 - 隔離 worktree 被拒不再結束這次 Workflow 呼叫。1.2.5 被拒時會回傳 boundary，worker 要到下一次呼叫才會自己建 worktree；主 session 若在那個 boundary 收尾，就永遠跑不到那一步，所以在 Claude Code 拒絕每個 worktree 的 session 上 run 仍會失敗。被拒的 agent 根本沒有啟動，現在不寫進 journal、也不算作這次呼叫的 agent，自建 worktree 的重跑會在同一次呼叫內接著進行。

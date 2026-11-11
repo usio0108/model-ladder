@@ -140,7 +140,7 @@ Basic fields and controls are shown in the [README](README.md#band-claude-code).
 | Claude handoff | `handoff now` writes a template, then runs `/model-ladder:handoff` when the session is idle. With the usage guard on, the band does the same once when a usage window reaches the threshold. |
 | Handoff fallback | If submission fails, a toast gives the command; the template remains available. |
 | Codex controls | Enter `g`, `t 90`, `h`, or `q`, followed by Enter. |
-| CLI controls | `watch.mjs` accepts `--guard on|off`, `--threshold 1-100`, and `--handoff`. |
+| CLI controls | `watch.mjs` accepts `--guard on|off`, `--threshold 1-100`, and `--handoff`; add `--set` to save and exit without watching. In Codex you can also just ask, for example "set the model-ladder threshold to 80". |
 
 Manual handoff does not cancel the run.
 If Codex autorun or its panel is missing, check that the plugin is enabled, restart the session, and review/trust its hooks in `/hooks`.
