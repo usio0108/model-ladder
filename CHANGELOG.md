@@ -6,6 +6,12 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+## [1.2.6] - 2026-11-11
+
+- A refused isolation worktree no longer ends the Workflow call. In 1.2.5 the refusal returned a boundary, and the worker created its own worktree only on the next call; a main session that stopped at that boundary never got there, so runs still failed on sessions where Claude Code refuses every worktree. The refused agent never started, so it is no longer journaled or counted as the call's agent, and the own-worktree rerun follows in the same call.
+- Worker skill instructions are now mandatory and checked strictly in both runtimes. `used` is true only when the worker itself invoked the capability in this attempt (a Skill tool call, or a direct tool call; in Codex, reading and following the skill's SKILL.md). Rules injected by hooks, a mode that was already active, or following a skill in spirit count as `used: false`, which fails the attempt. Before, a worker could report ponytail as used because a SubagentStart hook had injected its rules.
+- Each attempt's skill report (name, applies, available, used, note) is written to `.model-ladder/history.jsonl` in both runtimes, so you can check afterwards whether a skill really ran.
+
 ## [1.2.5] - 2026-11-11
 
 - When Claude Code refuses a worker's isolation worktree, the worker now creates its own worktree with `git worktree add --detach` under `.claude/worktrees/` and works only there, for that attempt and every later one in the run. Retrying host isolation did not help on Windows sessions where Claude Code compares `c:\` and `C:/` as different paths and refuses every worktree. The protected-path hook now resolves paths against the worktree that holds the file, so it still applies when the worker starts in the main checkout. Worker errors keep 600 characters instead of 200, so a refusal shows both paths.

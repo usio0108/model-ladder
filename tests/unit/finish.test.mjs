@@ -1,7 +1,7 @@
 import '../helpers/isolate-home.mjs'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
@@ -76,4 +76,14 @@ test('a locked worktree and its branch are removed (remove needs --force twice)'
   assert.ok(!existsSync(s.wt), 'locked worktree directory removed')
   assert.ok(!git(s.dir, 'worktree', 'list').stdout.includes('worktrees'), 'worktree unregistered')
   assert.equal(git(s.dir, 'branch', '--list', 'worktree-w').stdout.trim(), '', 'its branch deleted')
+})
+
+test('history attempts carry compact per-attempt skill reports', () => {
+  const s = setup()
+  const skills = [{ name: 'ponytail', applies: true, available: true, used: false, note: 'hook only', extra: 'dropped' }]
+  const r = finish(s.dir, { task: 't', result: { status: 'FAILED', plan: { allowTests: false, allowTestsReason: 'r' }, attempts: [{ cell: 'a', pass: false, reason: 'x', skills }, { cell: 'b', pass: false, reason: 'y' }], tokens: 1 } })
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  const row = JSON.parse(readFileSync(join(s.run, 'history.jsonl'), 'utf8').trim().split('\n').at(-1))
+  assert.deepEqual(row.attempts[0].skills, [{ name: 'ponytail', applies: true, available: true, used: false, note: 'hook only' }])
+  assert.equal('skills' in row.attempts[1], false)
 })

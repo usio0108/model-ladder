@@ -228,7 +228,7 @@ function main(input) {
     status: aborted ? 'ABORTED' : result?.status ?? 'ERROR',
     forecast,
     start: result?.plan?.start ?? null,
-    attempts: (result?.attempts ?? []).map((a) => ({ cell: a.cell, pass: a.pass, reason: a.reason, action: a.action, tokens: a.tokens, modelContext: a.modelContext, diagnosisContext: a.diagnosisContext })),
+    attempts: (result?.attempts ?? []).map((a) => ({ cell: a.cell, pass: a.pass, reason: a.reason, action: a.action, tokens: a.tokens, modelContext: a.modelContext, diagnosisContext: a.diagnosisContext, ...(a.skills?.length && { skills: a.skills.map(({ name, applies, available, used, note }) => ({ name, applies, available, used, note })) }) })),
     winner: result?.winner ? { summary: result.winner.summary } : null,
     tokens: result?.tokens ?? 0,
     applied: outcome.applied,

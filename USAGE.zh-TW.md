@@ -130,7 +130,7 @@ DIRECT 不代表完成，必須遵守回傳的保護規則，獨立驗證後才�
 | `keepFailed` | `false` | 保留失敗 worktree。 |
 | `timeoutMs` | `600000` | Codex 每個角色或驗證命令的閒置逾時。 |
 | `usageGuard` | 開啟、`90%` | 使用量保護，建議存於個人檔。 |
-| `worker_skills` / `verifier_skills` | 空白 | 自然語言角色指示。 |
+| `worker_skills` / `verifier_skills` | 空白 | 自然語言角色指示。適用的指名能力為必用：worker 必須實際呼叫，不能只是照著做。 |
 | `direct_threshold` | `30` | 小任務 DIRECT 的 context 百分比，或 `"off"`。 |
 | `autoRun` / `band` | `true` | 預設路由與顯示開關。 |
 

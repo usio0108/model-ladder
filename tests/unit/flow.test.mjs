@@ -546,6 +546,9 @@ test('skill instructions stay intact, stay in their role, and omit empty or unre
   assert.ok(calls[1].prompt.includes(`SKILL INSTRUCTIONS\n${verifier}\n\nInterpret these natural-language instructions`))
   assert.ok(!calls[1].prompt.includes(worker))
   assert.match(calls[0].prompt, /Evaluate each condition first, then select only the applicable relevant skills/)
+  assert.match(calls[0].prompt, /Every named capability whose condition applies is mandatory/)
+  assert.match(calls[0].prompt, /used is true only if you yourself invoked that capability during this attempt/)
+  assert.match(calls[0].prompt, /Rules injected by hooks \(SessionStart, SubagentStart\).*do NOT count/)
   const names = { skills: { worker: 'ponytail:ponytail, ui:ux', verifier: 'verify:review' } }
   const named = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }], names)
   assert.match(named.calls[0].prompt, /SKILL INSTRUCTIONS\nponytail:ponytail, ui:ux\n/)
@@ -757,18 +760,29 @@ test('other worker errors are not retried', async () => {
   assert.deepEqual(calls.map((c) => c.label.split(' ')[0]), ['worker', 'diagnose', 'worker', 'verify'])
 })
 
-test('telemetry: the isolation retry is its own boundary and replays without respending', async () => {
-  let journal = [], out
-  for (const step of [{ label: 'worker', throws: refused }, { label: 'worker', result: done }, { label: 'verify', result: pass }]) {
-    const r = await runWith([step], { telemetry: true, journal })
-    assert.equal(r.calls.length, 1, 'one agent per Workflow call')
-    out = r.out; journal = out.journal
-  }
-  assert.equal(out.status, 'VERIFIED')
-  assert.deepEqual(journal.map((e) => e.phase), ['worker', 'worker', 'verify'])
-  assert.deepEqual(journal.map((e) => `${e.model}/${e.effort}`), ['haiku/low', 'haiku/low', 'haiku/low'])
-  assert.equal(out.attempts.length, 1)
-  assert.equal(out.tokens, 30)
+test('telemetry: a refused worktree is no boundary, so the own-worktree rerun runs in the same Workflow call', async () => {
+  const first = await runWith([{ label: 'worker', throws: refused }, { label: 'worker', result: done }], { telemetry: true, journal: [] })
+  assert.equal(first.out.status, 'BOUNDARY')
+  assert.equal(first.calls.length, 2, 'the refusal and the rerun share one call')
+  assert.equal(first.calls[1].isolation, undefined)
+  assert.deepEqual(first.out.journal.map((e) => e.phase), ['worker'], 'the refused agent is not journaled')
+  assert.equal(first.out.journal[0].measurement.result.status, 'done')
+  const second = await runWith([{ label: 'verify', result: pass }], { telemetry: true, journal: first.out.journal })
+  assert.equal(second.calls.length, 1, 'the worker replays without respending')
+  assert.equal(second.out.status, 'VERIFIED')
+  assert.deepEqual(second.out.journal.map((e) => e.phase), ['worker', 'verify'])
+  assert.equal(second.out.attempts.length, 1)
+})
+
+test('telemetry: a later live attempt after replay is refused again and falls back in its own call', async () => {
+  let r = await runWith([{ label: 'worker', throws: refused }, { label: 'worker', result: done }], { telemetry: true, journal: [], runId: 'claude-abcdef12-x' })
+  r = await runWith([{ label: 'verify', result: fail }], { telemetry: true, journal: r.out.journal, runId: 'claude-abcdef12-x' })
+  r = await runWith([{ label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') }], { telemetry: true, journal: r.out.journal, runId: 'claude-abcdef12-x' })
+  r = await runWith([{ label: 'worker', throws: refused }, { label: 'worker', result: done }], { telemetry: true, journal: r.out.journal, runId: 'claude-abcdef12-x' })
+  assert.equal(r.out.status, 'BOUNDARY')
+  assert.equal(r.calls[0].isolation, 'worktree')
+  assert.match(r.calls[1].prompt, /ladder-abcdef12-2/)
+  assert.deepEqual(r.out.journal.map((e) => e.phase), ['worker', 'verify', 'diagnose', 'worker'])
 })
 
 test('worker skills: the report lists each named capability, and an applicable, available one left unused fails the attempt', async () => {

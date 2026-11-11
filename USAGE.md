@@ -103,7 +103,7 @@ Personal files are `~/.claude/model-ladder.json` and `~/.codex/model-ladder.json
 | `keepFailed` | `false` | Retain failed worktrees. |
 | `timeoutMs` | `600000` | Codex idle timeout per role or verify command. |
 | `usageGuard` | Enabled, `90%` | Usage protection, preferably stored in the personal file. |
-| `worker_skills` / `verifier_skills` | Empty | Natural-language role instructions. |
+| `worker_skills` / `verifier_skills` | Empty | Natural-language role instructions. Named capabilities that apply are mandatory: the worker must actually invoke them, not just follow them in spirit. |
 | `direct_threshold` | `30` | Context percentage for small-task DIRECT, or `"off"`. |
 | `autoRun` / `band` | `true` | Default routing and display controls. |
 

@@ -339,8 +339,11 @@ async function measured(prompt, opts) {
     return entry.measurement
   }
   if (args.telemetry && executed) throw { boundary: true }
-  executed = true
   const measurement = await callAgent(prompt, opts)
+  // A refused isolation worktree never started an agent: no boundary and no journal entry, so the own-worktree
+  // rerun follows in this same Workflow call. A main session that stopped at that boundary never reached it.
+  if (isolationRefused(measurement)) return measurement
+  executed = true
   if (args.telemetry) {
     journal.push({ phase: phaseName, model: opts.model, effort: opts.effort, measurement })
     replayIndex++
@@ -470,7 +473,7 @@ function brief(plan, history, hint, own = null) {
     sections.push(`HINT\n  ${hint}`)
   }
   const skills = skillsSection(args.skills?.worker)
-  if (skills) sections.push(`${skills}\n\nIn the skills field of your report, list every capability these instructions name, one entry each: applies (its condition holds for this task), available (you found it here), used (you actually invoked it in this attempt), note (how it was used, or why not). An applicable capability that is available but not used fails this attempt, so invoke it before you report.`)
+  if (skills) sections.push(`${skills}\n\nIn the skills field of your report, list every capability these instructions name, one entry each: applies (its condition holds for this task), available (you found it here), used (see below), note (how it was used, or why not). Every named capability whose condition applies is mandatory: invoke it before you report. used is true only if you yourself invoked that capability during this attempt: a Skill tool call for a skill, a direct tool call for an MCP, plugin or slash command. Rules injected by hooks (SessionStart, SubagentStart), a mode that was already active, or following a skill in spirit without invoking it do NOT count; report those as used:false. An applicable capability that is available but not used fails this attempt.`)
   sections.push('EDITING RULES\n  Edit files with the Edit/Write tools, never through an interpreter one-off (python/node -e/sed scripts) whose failure can be silent.\n  If Python is genuinely needed, run it with `uv run` (ephemeral). If the project did not already use Python, delete everything that run created (.venv, uv.lock, __pycache__, scratch scripts) before reporting.\n  Before reporting done, run `git status --porcelain --untracked-files=all` in the worktree and confirm every file you claim in filesChanged shows a worker change (second column not a space, or ??).')
   sections.push('REPORT\n  worktreePath: the output of `git rev-parse --show-toplevel` (not pwd).\n  status "blocked" only if the task cannot be done; say why in blockedReason. In summary, include concise handoff context: progress, decisions, user constraints supplied in TASK, cautions, failed approaches, and next steps. Separate verified work from unverified claims. Do not infer parent conversation context.')
   return sections.join('\n\n')
@@ -556,7 +559,8 @@ async function run(plan) {
     tokens,
   })
 
-  // Set by the first host refusal and kept for the rest of the run; journal replay sets it again the same way.
+  // Set by the first host refusal and kept for the rest of this Workflow call. Refusals are not journaled, so a later
+  // call that replays an attempt starts without it; its next live worker is refused again and falls back the same way.
   let ownWorktrees = false
   const runKey = String(args.runId ?? 'run').replace(/^[a-z]+-/, '').slice(0, 8)
 
@@ -572,7 +576,7 @@ async function run(plan) {
     let worker = await runWorker()
     let workerTokens = worker.tokens
     // A host refusal of a healthy worktree: the same cell again, in a worktree the worker creates itself; no diagnosis,
-    // no escalation. A separate measured() call, so the boundary and journal replay still allow one agent per Workflow call.
+    // no escalation, and in the same Workflow call (measured() does not count the refused agent).
     if (!ownWorktrees && isolationRefused(worker)) {
       log(`#${n} ${label(cell)}: isolation worktree refused; the worker creates its own worktree from now on`)
       ownWorktrees = true

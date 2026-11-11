@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [1.2.6] - 2026-11-11
+
+- 隔離 worktree 被拒不再結束這次 Workflow 呼叫。1.2.5 被拒時會回傳 boundary，worker 要到下一次呼叫才會自己建 worktree；主 session 若在那個 boundary 收尾，就永遠跑不到那一步，所以在 Claude Code 拒絕每個 worktree 的 session 上 run 仍會失敗。被拒的 agent 根本沒有啟動，現在不寫進 journal、也不算作這次呼叫的 agent，自建 worktree 的重跑會在同一次呼叫內接著進行。
+- 兩個 runtime 的 worker skill 指示現在一律為必用，並嚴格檢查。只有 worker 本身在這次 attempt 實際呼叫該能力時（Skill tool 呼叫或直接呼叫工具；Codex 為實際讀取並照做該 skill 的 SKILL.md），`used` 才為 true。hook 注入的規則、原本就開著的模式、只是照著精神做，都算 `used: false`，attempt 會失敗。先前 worker 可以因為 SubagentStart hook 注入了 ponytail 的規則，就回報已使用 ponytail。
+- 兩個 runtime 都會把每次 attempt 的 skill 回報（name、applies、available、used、note）寫入 `.model-ladder/history.jsonl`，事後可以查 skill 是否真的有執行。
+
 ## [1.2.5] - 2026-11-11
 
 - Claude Code 拒絕 worker 的隔離 worktree 時，worker 現在會自己用 `git worktree add --detach` 在 `.claude/worktrees/` 下建立 worktree，並只在其中工作；該次及同一 run 之後的每次 attempt 都如此。部分 Windows session 中 Claude Code 會把 `c:\` 與 `C:/` 當成不同路徑而拒絕每個 worktree，重試隔離沒有用。受保護路徑 hook 現在依檔案所在的 worktree 判斷路徑，所以 worker 從主 checkout 起步時仍然有效。worker 錯誤訊息保留 600 字（原為 200 字），被拒時能看到兩個路徑。
