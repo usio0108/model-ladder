@@ -77,7 +77,7 @@ function buildText(input, env, deps, notice) {
     if (Number.isFinite(usage) && usage >= (config.usageGuard?.threshold ?? 90)) parts.push('The usage guard is at its threshold. Use the handoff skill to write a handoff from this conversation.')
   }
   if (env.MODEL_LADDER_HUD === '1') {
-    parts.push('model-ladder HUD is already running in this terminal. Reuse it; do not start a separate watcher.')
+    if (/^[0-9a-f-]{36}$/i.test(env.MODEL_LADDER_HUD_TOKEN ?? '')) parts.push('model-ladder HUD is already running in this terminal. Reuse it; do not start a separate watcher.')
   } else if (config.band !== false && !['0', 'false', 'off', 'no'].includes(String(env.MODEL_LADDER_BAND ?? '').toLowerCase())) {
     const hud = fileURLToPath(new URL('../scripts/codex-hud.mjs', import.meta.url))
     const watcher = fileURLToPath(new URL('../scripts/watch.mjs', import.meta.url))

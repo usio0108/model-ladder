@@ -6,6 +6,12 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-11-11
+
+- The Codex HUD now finds the session itself. Interactive Codex runs the SessionStart hook in the shared `codex app-server` daemon with the daemon's environment, so the HUD token never reached the hook, no marker was written, and the HUD showed "Session hook not detected" with no context usage. The HUD now falls back to the newest `codex-tui` rollout under `$CODEX_HOME/sessions` for the same folder that started after the HUD did, rescans every 3 s at most, and switches to a newer rollout after `/new` or `/resume`. It reads the whole first line, which is about 19 KB in real rollouts.
+- The SessionStart hook prints "model-ladder HUD is already running" only when `MODEL_LADDER_HUD_TOKEN` is a valid UUID, so sessions that inherit a stale `MODEL_LADDER_HUD=1` from the daemon no longer get it.
+- The HUD's session warning and handoff notices go at the end of the first line instead of replacing the second, so the `model/effort  act./est.  task` header row and the agent row stay visible. On narrow terminals the context goes first, then the key hints. The warning now reads `⚠ session ?`. Missing context shows `ctx ?`.
+- Codex router, verifier and tiers default to the family names `terra`, `luna` and `sol`, resolved at load time to the highest version in `$CODEX_HOME/models_cache.json` (for example `terra` → `gpt-6.1-terra`). When the cache has no match they fall back to `gpt-6-luna`, `gpt-6.1-terra` and `gpt-6.1-sol`. Full model names are used as given.
 - **Claude band background rows** no longer stay hidden while their task still runs. A reply that waits on the background now shows every task still running, not only the current question's, so a task hidden because an earlier reply was misread as a final answer comes back (for example a background test whose question was answered with "I'll report back when the rerun finishes", then a later "you'll get a notification when it's done"). The waiting keywords also cover `回報`, `回报`, `跑完` and `重跑`.
 
 ## [1.2.3] - 2026-11-10

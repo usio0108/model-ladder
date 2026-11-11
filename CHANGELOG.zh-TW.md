@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-11-11
+
+- Codex HUD 現在會自己找出 session。互動式 Codex 是在共用的 `codex app-server` daemon 中，以 daemon 的環境執行 SessionStart hook，所以 HUD 的 token 傳不到 hook，也就不會寫出 marker，HUD 因此一直顯示「Session hook not detected」，也沒有 context 用量。現在 HUD 會改找 `$CODEX_HOME/sessions` 下同一資料夾、在 HUD 啟動之後才開始的最新 `codex-tui` rollout。HUD 最多每 3 秒重新掃描一次，`/new` 或 `/resume` 之後會切換到較新的 rollout。HUD 會讀完整的第一行，實際 rollout 的第一行約 19 KB。
+- SessionStart hook 只在 `MODEL_LADDER_HUD_TOKEN` 是合法 UUID 時才輸出「model-ladder HUD is already running」，所以從 daemon 繼承到殘留 `MODEL_LADDER_HUD=1` 的 session 不會再收到這段文字。
+- HUD 的 session 警告和 handoff 通知改為接在第一列尾端，不再取代第二列，因此 `model/effort  act./est.  task` 標題列和 agent 列都會保留。終端機較窄時，先省略 context，再省略按鍵提示。警告改為 `⚠ session ?`，沒有 context 時顯示 `ctx ?`。
+- Codex 的 router、verifier 和 tiers 預設改用家族名稱 `terra`、`luna` 和 `sol`，載入時解析為 `$CODEX_HOME/models_cache.json` 中最高的版本（例如 `terra` → `gpt-6.1-terra`）。cache 中沒有符合的模型時，退回 `gpt-6-luna`、`gpt-6.1-terra` 和 `gpt-6.1-sol`。完整模型名稱則照原樣使用。
 - **Claude band 背景列**不再在工作仍在執行時一直被藏起來。回覆若表示在等背景結果，現在會重新顯示所有仍在執行的工作，不只限於當輪的問題。所以先前因回覆被誤判為最終答案而藏起來的工作會重新出現，例如背景測試所屬的問題先回覆「重跑完我會回報結果」，之後又回覆「跑完會收到通知」。等待關鍵字也加入了 `回報`、`回报`、`跑完` 與 `重跑`。
 
 ## [1.2.3] - 2026-11-10

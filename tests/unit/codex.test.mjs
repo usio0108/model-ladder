@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, after } from 'node:test'
-import { runLadder, loadConfig, discoverVerify, readInput } from '../../scripts/codex-run.mjs'
+import { runLadder, loadConfig, discoverVerify, readInput, resolveModel } from '../../scripts/codex-run.mjs'
 import { SCHEMAS, validate, environmentFailure, usageLimitFailure } from '../../scripts/codex-exec.mjs'
 import { artifactDir, pruneRuns } from '../../scripts/common.mjs'
 import { activeRuns, registerRun, unregisterRun } from '../../scripts/usage-guard.mjs'
@@ -49,6 +49,39 @@ function fixture(scenario = {}, overrides = {}) {
 const run = (cwd, input = {}, extra = {}) => runLadder({ task: 'Fix greeting typo', ...input }, { cwd, executable: { command: process.execPath, prefixArgs: [fake, cwd] }, ...extra })
 const calls = (dir) => read(dir, '.model-ladder/fake-calls.jsonl').trim().split('\n').map(JSON.parse)
 const cleaned = (dir) => { assert.equal(existsSync(join(dir, '.model-ladder/run.json')), false); assert.deepEqual(existsSync(join(dir, '.model-ladder/runs')) ? readdirSync(join(dir, '.model-ladder/runs')).filter((f) => f.endsWith('.json')) : [], []); assert.equal(git(dir, 'worktree', 'list', '--porcelain').match(/^worktree /gm).length, 1) }
+
+test('resolveModel maps family names to the highest cached version, with fallbacks and passthrough', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ladder-models-'))
+  dirs.push(home)
+  const slugs = ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-reserve', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'codex-auto-review']
+  writeFileSync(join(home, 'models_cache.json'), JSON.stringify({ models: slugs.map((slug) => ({ slug })) }))
+  assert.equal(resolveModel('terra', home), 'gpt-6.1-terra')
+  assert.equal(resolveModel('sol', home), 'gpt-6.1-sol')
+  assert.equal(resolveModel('luna', home), 'gpt-6-luna')
+  writeFileSync(join(home, 'models_cache.json'), JSON.stringify({ models: [{ slug: 'gpt-5.6-terra' }, { slug: 'gpt-6-terra' }, { slug: 'gpt-10-terra' }, { slug: 'gpt-9.9-terra' }] }))
+  assert.equal(resolveModel('terra', home), 'gpt-10-terra')
+  writeFileSync(join(home, 'models_cache.json'), JSON.stringify({ models: [{ slug: 'gpt-5.6-sol' }] }))
+  assert.equal(resolveModel('terra', home), 'gpt-6.1-terra')
+  writeFileSync(join(home, 'models_cache.json'), 'not json')
+  assert.equal(resolveModel('luna', home), 'gpt-6-luna')
+  assert.equal(resolveModel('sol', join(home, 'missing')), 'gpt-6.1-sol')
+  assert.equal(resolveModel('terra', join(home, 'missing')), 'gpt-6.1-terra')
+  assert.equal(resolveModel('gpt-5.6-terra', home), 'gpt-5.6-terra')
+  assert.equal(resolveModel('astra', home), 'astra')
+})
+
+test('loadConfig defaults use family names resolved from the models cache', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ladder-models-'))
+  dirs.push(home)
+  writeFileSync(join(home, 'models_cache.json'), JSON.stringify({ models: [{ slug: 'gpt-5.6-terra' }, { slug: 'gpt-6.1-terra' }] }))
+  const prior = process.env.CODEX_HOME
+  process.env.CODEX_HOME = home
+  try {
+    const config = loadConfig(mkdtempSync(join(tmpdir(), 'ladder-cfg-')))
+    assert.equal(config.router.model, 'gpt-6.1-terra')
+    assert.deepEqual(config.tiers.map((t) => t.model), ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol'])
+  } finally { process.env.CODEX_HOME = prior }
+})
 
 test('same package identity/version and generated rules do not drift', () => {
   const root = fileURLToPath(new URL('../../', import.meta.url))

@@ -120,9 +120,9 @@ DIRECT 不代表完成，必須遵守回傳的保護規則，獨立驗證後才�
 
 | 設定 | 預設值 | 用途 |
 |---|---|---|
-| `router` | Claude：`sonnet/low`；Codex：`gpt-5.6-terra/low` | 路由任務與診斷失敗。 |
-| `verifier` | Claude：`haiku/low`；Codex：`gpt-6-luna/low` | 獨立檢查結果。 |
-| `tiers` | Haiku、Sonnet、Opus；Codex 使用 Luna、Terra、Sol | 依序選模型與 effort，`maxEffortJump` 限制 effort 升幅。 |
+| `router` | Claude：`sonnet/low`；Codex：`terra/low` | 路由任務與診斷失敗。 |
+| `verifier` | Claude：`haiku/low`；Codex：`luna/low` | 獨立檢查結果。 |
+| `tiers` | Haiku、Sonnet、Opus；Codex 使用 `luna`、`terra`、`sol` | 依序選模型與 effort，`maxEffortJump` 限制 effort 升幅。Codex 的家族名（`luna`、`terra`、`sol`）執行時會自動解析為 `$CODEX_HOME/models_cache.json` 中的最新版本（讀不到時退回 `gpt-6-luna`、`gpt-6.1-terra`、`gpt-6.1-sol`）；寫完整名稱（如 `gpt-5.6-terra`）則照原樣使用。 |
 | `maxAttempts` | `4` | 最多嘗試次數。 |
 | `verify` | 自動尋找 | 既有驗證命令或專案驗證 skill。 |
 | `protected` | `[]` | Worker 不得修改的額外路徑。 |

@@ -10,7 +10,7 @@ import { GUARD_DEFAULT, mergeConfig, parseThreshold, pluginLayer, projectPins, p
 import { artifactDir } from '../../scripts/common.mjs'
 import { loadLayered, userConfigPath as nodeUserConfigPath, writeUserGuard } from '../../scripts/config.mjs'
 import { DEFAULTS as CLAUDE_DEFAULTS, loadConfig as loadClaude } from '../../scripts/preflight.mjs'
-import { DEFAULTS as CODEX_DEFAULTS, loadConfig as loadCodex } from '../../scripts/codex-run.mjs'
+import { DEFAULTS as CODEX_DEFAULTS, loadConfig as loadCodex, resolveModel } from '../../scripts/codex-run.mjs'
 import { configureGuard, panelCommand } from '../../scripts/watch.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
@@ -196,7 +196,7 @@ test('Codex settings read ~/.codex/model-ladder.json between the defaults and th
   assert.equal(config.timeoutMs, 1234)
   assert.equal(config.worker_skills, 'mine')
   assert.deepEqual(config.usageGuard, { enabled: false, threshold: 60 })
-  assert.equal(config.router.model, CODEX_DEFAULTS.router.model)
+  assert.equal(config.router.model, resolveModel(CODEX_DEFAULTS.router.model))
   writeJson(user, '[1]')
   assert.throws(() => loadCodex(repo), /must hold a JSON object/)
   freshUserConfig()

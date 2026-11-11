@@ -9,6 +9,7 @@ import { artifactDir } from '../../scripts/common.mjs'
 
 // Never touch the real PowerShell profile from a test.
 const OFF = { platform: 'linux' }
+const TOKEN = '11111111-2222-3333-4444-555555555555'
 
 test('HUD session writes its session ID to its own temporary marker', () => {
   const base = artifactDir(process.cwd())
@@ -47,7 +48,7 @@ test('session reuses an active HUD, preserves panel fallback and skips internal 
     assert.match(sessionText({ cwd }, { MODEL_LADDER_AUTORUN: '0' }, OFF), /model-ladder panel/)
     assert.doesNotMatch(sessionText({ cwd }, { MODEL_LADDER_AUTORUN: '0' }, OFF), /installed and on/)
     assert.equal(sessionText({ cwd }, { MODEL_LADDER_ROLE: 'worker' }, OFF), '')
-    const hud = sessionText({ cwd }, { MODEL_LADDER_HUD: '1', MODEL_LADDER_BAND: '0' }, OFF)
+    const hud = sessionText({ cwd }, { MODEL_LADDER_HUD: '1', MODEL_LADDER_HUD_TOKEN: TOKEN, MODEL_LADDER_BAND: '0' }, OFF)
     assert.match(hud, /HUD is already running/)
     assert.doesNotMatch(hud, /open_in_codex/)
     mkdirSync(join(cwd, '.codex'))
@@ -91,7 +92,7 @@ test('session leaves internal roles and an already running HUD out of the takeov
     assert.equal(sessionText({ cwd }, { MODEL_LADDER_ROLE: 'worker' }, { ...role, platform: 'win32' }), '')
     assert.equal(role.calls.length, 0)
     const inHud = stubs()
-    const text = sessionText({ cwd }, { MODEL_LADDER_HUD: '1', MODEL_LADDER_BAND: '0' }, { ...inHud, platform: 'win32' })
+    const text = sessionText({ cwd }, { MODEL_LADDER_HUD: '1', MODEL_LADDER_HUD_TOKEN: TOKEN, MODEL_LADDER_BAND: '0' }, { ...inHud, platform: 'win32' })
     assert.equal(inHud.calls.length, 1)
     assert.doesNotMatch(text, /new PowerShell window/)
     assert.match(text, /HUD is already running/)
@@ -172,5 +173,17 @@ test('session takeover follows the user config only and survives setup failures'
     const unresolved = stubs()
     assert.doesNotMatch(sessionText({ cwd }, {}, { ...unresolved, platform: 'win32', documentsDir: () => undefined }), /PowerShell window/)
     assert.equal(unresolved.calls.length, 0)
+  } finally { rmSync(cwd, { recursive: true, force: true }) }
+})
+
+test('the HUD context needs MODEL_LADDER_HUD=1 and a valid UUID token', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'ml-session-'))
+  try {
+    for (const token of [undefined, '', 'not-a-uuid', '../../etc/passwd-aaaaaaaaaaaaaaaaaaaa']) {
+      const env = { MODEL_LADDER_HUD: '1', MODEL_LADDER_BAND: '0', ...(token === undefined ? {} : { MODEL_LADDER_HUD_TOKEN: token }) }
+      assert.doesNotMatch(sessionText({ cwd }, env, OFF), /HUD is already running/)
+    }
+    assert.doesNotMatch(sessionText({ cwd }, { MODEL_LADDER_HUD_TOKEN: TOKEN, MODEL_LADDER_BAND: '0' }, OFF), /HUD is already running/)
+    assert.match(sessionText({ cwd }, { MODEL_LADDER_HUD: '1', MODEL_LADDER_HUD_TOKEN: TOKEN, MODEL_LADDER_BAND: '0' }, OFF), /HUD is already running/)
   } finally { rmSync(cwd, { recursive: true, force: true }) }
 })

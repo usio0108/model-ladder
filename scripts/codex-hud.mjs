@@ -1,5 +1,6 @@
 import { execFileSync, spawn as nodeSpawn } from 'node:child_process'
-import { mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { extname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -32,7 +33,7 @@ export function parseArgs(argv) {
   return options
 }
 
-export function hudText(state, width = 80, { now = Date.now(), guard = { enabled: true, threshold: 90 }, color = false, expanded = false } = {}) {
+export function hudText(state, width = 80, { now = Date.now(), guard = { enabled: true, threshold: 90 }, color = false, expanded = false, notice = '' } = {}) {
   const agents = Array.isArray(state?.agents) ? state.agents.filter((agent) => agent && typeof agent === 'object' && (!state.result || agent.endedAt)) : []
   const visible = visibleAgents(agents, now)
   const selected = visible.findLast((agent) => agent.endedAt === null) ?? visible.at(-1)
@@ -41,17 +42,83 @@ export function hudText(state, width = 80, { now = Date.now(), guard = { enabled
   const base = expanded ? { ...state, agents } : current
   const frame = renderLive(base, { width, now, guard, color }).split('\n')
   const context = state?.context
-  const ctx = formatContext(state?.context) ? ` · ${formatContext(state.context)}` : ''
+  const ctx = ` · ${formatContext(state?.context) || 'ctx ?'}`
+  const tail = notice ? ` · ${notice}` : ''
   const keys = ` · G:${guard.enabled ? 'on' : 'off'} ^] handoff ^\\ ${expanded ? 'collapse' : 'expand'}`
   // Usage stays whole: the context goes first, then renderLive drops the version, and the key hints go last.
-  const whole = (text) => !renderLive(base, { width: Math.max(0, width - displayWidth(text)), now, guard }).split('\n')[0].trimEnd().endsWith('…')
-  const controls = [`${ctx}${keys}`, keys, ''].find(whole) ?? ''
+  const whole = (text) => displayWidth(text) <= width && !renderLive(base, { width: Math.max(0, width - displayWidth(text)), now, guard }).split('\n')[0].trimEnd().endsWith('…')
+  // The notice outranks the hints: when even the notice alone is too long it is truncated, never dropped.
+  const shrunk = []
+  for (let n = displayWidth(tail) - 1; n > 4; n--) shrunk.push(truncate(tail, n))
+  const controls = [`${ctx}${keys}${tail}`, `${keys}${tail}`, tail, ...shrunk, ''].find(whole) ?? ''
   const rendered = renderLive(base, { width: Math.max(0, width - displayWidth(controls)), now, guard, color }).split('\n')[0]
   // Once the key hints are gone the version has already given way, even if the freed columns would fit it.
   const header = controls ? rendered : rendered.replace(/model-ladder \(v[^)]*\)/, 'model-ladder')
   if (expanded) return [`${header}${truncate(controls, Math.max(0, width))}`, ...frame.slice(1).map((line) => truncate(line, width))].join('\n')
   const status = selected ? `${frame[2]}${selected.endedAt && state?.result?.status ? ` · ${state.result.status}` : ''}` : 'idle'
   return `${header}${truncate(controls, Math.max(0, width))}\n${truncate(status, width)}`
+}
+
+const SESSION_ID = /^[0-9a-f-]{36}$/i
+const sameDir = (a, b) => {
+  const norm = (p) => { const r = resolve(String(p)).replace(/[\\/]+$/, ''); return process.platform === 'win32' ? r.toLowerCase() : r }
+  return norm(a) === norm(b)
+}
+
+// Finds the TUI session of this HUD from the rollout files under CODEX_HOME/sessions, because the shared app-server
+// daemon runs the hook with its own environment and never writes the marker. The scan is throttled, and a rollout's
+// first line never changes, so each file is parsed once.
+export function createSessionFinder(cwd, startedAt, { home = () => process.env.CODEX_HOME ?? join(homedir(), '.codex'), interval = 3000, now = Date.now } = {}) {
+  const parsed = new Map()
+  let scannedAt = -Infinity, found = null
+  const files = (dir, out = []) => {
+    let entries
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return out }
+    for (const entry of entries) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) files(path, out)
+      else if (/^rollout-.*\.jsonl$/.test(entry.name)) out.push(path)
+    }
+    return out
+  }
+  const meta = (path) => {
+    let fd
+    try {
+      fd = openSync(path, 'r')
+      // The first line is ~19KB with base_instructions: read in chunks up to the first newline, capped at 1MB.
+      const chunks = []
+      let total = 0
+      while (total < 1048576) {
+        const buffer = Buffer.alloc(16384)
+        const n = readSync(fd, buffer, 0, buffer.length, total)
+        if (n <= 0) break
+        const end = buffer.subarray(0, n).indexOf(10)
+        if (end >= 0) { chunks.push(buffer.subarray(0, end)); break }
+        chunks.push(buffer.subarray(0, n)); total += n
+      }
+      const line = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      const p = line?.payload
+      if (line?.type !== 'session_meta' || !SESSION_ID.test(p?.id ?? '') || p.originator !== 'codex-tui' || typeof p.cwd !== 'string') return null
+      const at = Date.parse(p.timestamp)
+      return Number.isFinite(at) && sameDir(p.cwd, cwd) ? { id: p.id, at } : null
+    } catch { return null } finally { if (fd !== undefined) try { closeSync(fd) } catch {} }
+  }
+  return () => {
+    if (now() - scannedAt < interval) return found
+    scannedAt = now()
+    let best = null
+    for (const path of files(join(home(), 'sessions'))) {
+      let mtime
+      try { mtime = statSync(path).mtimeMs } catch { continue }
+      // Same 2 s slack as the session timestamp below: Linux stamps mtime from a coarse clock that can trail Date.now().
+      if (mtime < startedAt - 2000) continue
+      if (!parsed.has(path)) parsed.set(path, meta(path))
+      const hit = parsed.get(path)
+      if (hit && hit.at >= startedAt - 2000 && (!best || hit.at > best.at)) best = hit
+    }
+    if (best) found = best.id
+    return found
+  }
 }
 
 function readLive(cwd) {
@@ -140,10 +207,10 @@ export async function runHud({ cwd = process.cwd(), args = [], input = process.s
     const guardConfig = configureGuard(cwd, {})
     if (Date.now() - usageAt >= 5000) {
       usage = readCodexUsage(undefined, undefined, { details: true, resets: true }); usageAt = Date.now()
-      context = readCodexContext(cwd, statMarker())
+      context = readCodexContext(cwd, sessionId())
       if (!running && ['fiveHour', 'sevenDay'].some((kind) => Number.isFinite(usage?.[kind]) && Number.isFinite(usage?.[`${kind}ResetsAt`]))) try {
         guardHandoff(cwd, usage, guardConfig, (message) => {
-          const session = statMarker()
+          const session = sessionId()
           if (!session) return false
           try {
             queue(command, cwd, session, message)
@@ -153,16 +220,17 @@ export async function runHud({ cwd = process.cwd(), args = [], input = process.s
         })
       } catch { /* A concurrent HUD or unavailable state leaves the guard armed. */ }
     }
-    const lines = hudText({ ...state, usage, context }, Math.max(0, dimensions.columns - 1), { guard: guardConfig, color: output.isTTY, expanded }).split('\n')
+    const notice = Date.now() < handoffNoticeUntil ? handoffNotice : Date.now() - startedAt > 15000 && !sessionId() ? '⚠ session ?' : ''
+    const lines = hudText({ ...state, usage, context }, Math.max(0, dimensions.columns - 1), { guard: guardConfig, color: output.isTTY, expanded, notice }).split('\n')
     if (!hudRows(dimensions)) return
-    if (Date.now() < handoffNoticeUntil) lines[1] = truncate(handoffNotice, Math.max(0, dimensions.columns - 1))
-    else if (Date.now() - startedAt > 15000 && !statMarker()) lines[1] = truncate('Session hook not detected; review model-ladder in /hooks.', Math.max(0, dimensions.columns - 1))
     hudLines = lines
     const wanted = wantedRows(dimensions)
     if (wanted !== rows) { relayout(dimensions, wanted); return }
     output.write(`\x1b7${lines.slice(0, rows).map((line, i) => `\x1b[${dimensions.rows - rows + 1 + i};1H\x1b[2K${line}`).join('')}\x1b8`)
   }
   const statMarker = () => { try { const id = JSON.parse(readFileSync(marker, 'utf8')).sessionId; return typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id) ? id : null } catch { return null } }
+  const findSession = createSessionFinder(cwd, startedAt)
+  const sessionId = () => statMarker() ?? findSession()
   // Clear the old HUD rows, then reset the scroll region and the child's height for the new size and HUD height.
   const relayout = (next, nextRows) => {
     output.write(`\x1b7${Array.from({ length: rows }, (_, i) => `\x1b[${Math.max(1, Math.min(dimensions.rows, next.rows) - i)};1H\x1b[2K`).join('')}\x1b8`)

@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { TEST_PATTERNS } from '../hooks/guard.mjs'
@@ -19,16 +20,37 @@ import { forceStopRuns, registerRun, unregisterRun } from './usage-guard.mjs'
 import { git, snapshot, changed, protectedChange, makeWorktree, applyResult, removeOwned } from './codex-worktree.mjs'
 
 export const DEFAULTS = {
-  router: { model: 'gpt-5.6-terra', effort: 'low' },
-  verifier: { model: 'gpt-6-luna', effort: 'low' },
+  router: { model: 'terra', effort: 'low' },
+  verifier: { model: 'luna', effort: 'low' },
   tiers: [
-    { model: 'gpt-6-luna', efforts: ['low', 'medium', 'high'], maxEffortJump: 2 },
-    { model: 'gpt-5.6-terra', efforts: ['low', 'medium', 'high'], maxEffortJump: 2 },
-    { model: 'gpt-6.1-sol', efforts: ['low', 'medium', 'high', 'xhigh'], maxEffortJump: 1 },
+    { model: 'luna', efforts: ['low', 'medium', 'high'], maxEffortJump: 2 },
+    { model: 'terra', efforts: ['low', 'medium', 'high'], maxEffortJump: 2 },
+    { model: 'sol', efforts: ['low', 'medium', 'high', 'xhigh'], maxEffortJump: 1 },
   ],
   maxAttempts: 4, verify: null, protected: [], keepFailed: false, timeoutMs: 600000,
   usageGuard: GUARD_DEFAULT,
   direct_threshold: 30, commit: false, autoRun: true, band: true, hudTakeover: true, worker_skills: '', verifier_skills: '',
+}
+const FAMILY_FALLBACK = { luna: 'gpt-6-luna', terra: 'gpt-6.1-terra', sol: 'gpt-6.1-sol' }
+// luna/terra/sol -> highest-version gpt-<ver>-<family> slug in $CODEX_HOME/models_cache.json; anything else is returned unchanged.
+export function resolveModel(model, home = process.env.CODEX_HOME ?? join(homedir(), '.codex')) {
+  if (!Object.hasOwn(FAMILY_FALLBACK, model)) return model
+  const pattern = new RegExp(`^gpt-(\\d+(?:\\.\\d+)*)-${model}$`)
+  const newer = (a, b) => {
+    for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0)
+    return false
+  }
+  let best = null
+  try {
+    const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8'))
+    for (const entry of Array.isArray(cache?.models) ? cache.models : []) {
+      const match = typeof entry?.slug === 'string' && pattern.exec(entry.slug)
+      if (!match) continue
+      const parts = match[1].split('.').map(Number)
+      if (!best || newer(parts, best.parts)) best = { slug: entry.slug, parts }
+    }
+  } catch {}
+  return best?.slug ?? FAMILY_FALLBACK[model]
 }
 const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 // defaults -> ~/.codex/model-ladder.json (personal, e.g. usageGuard) -> .codex/model-ladder.json (project).
@@ -40,6 +62,9 @@ export function loadConfig(root) {
     typeof tier?.model !== 'string' || !tier.model.trim() || !Array.isArray(tier.efforts) || !tier.efforts.length ||
     tier.efforts.some((effort) => !EFFORTS.includes(effort)) || new Set(tier.efforts).size !== tier.efforts.length ||
     !Number.isSafeInteger(tier.maxEffortJump) || tier.maxEffortJump < 1)) throw new Error('tiers require model, unique supported efforts and positive integer maxEffortJump')
+  config.router = { ...config.router, model: resolveModel(config.router.model) }
+  config.verifier = { ...config.verifier, model: resolveModel(config.verifier.model) }
+  config.tiers = config.tiers.map((tier) => ({ ...tier, model: resolveModel(tier.model) }))
   if (new Set(config.tiers.map((tier) => tier.model)).size !== config.tiers.length) throw new Error('tier models must be unique')
   if (!Number.isSafeInteger(config.maxAttempts) || config.maxAttempts < 1 || !Number.isSafeInteger(config.timeoutMs) || config.timeoutMs < 1) throw new Error('maxAttempts and timeoutMs must be positive integers')
   if (!Array.isArray(config.protected) || config.protected.some((p) => typeof p !== 'string')) throw new Error('protected must be a list of globs')

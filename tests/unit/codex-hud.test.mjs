@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:
 import { tmpdir } from 'node:os'
 import { EventEmitter } from 'node:events'
 const pty = { spawn() { throw new Error('spawn not mocked') } }
-import { hudText, parseArgs, runHud, windowsCommand } from '../../scripts/codex-hud.mjs'
+import { createSessionFinder, hudText, parseArgs, runHud, windowsCommand } from '../../scripts/codex-hud.mjs'
 import { guardHandoff, HANDOFF_PROMPT } from '../../scripts/codex-guard-handoff.mjs'
 import { artifactDir } from '../../scripts/common.mjs'
 import { panelTitle } from '../../scripts/panel-title.mjs'
@@ -336,7 +336,7 @@ test('Ctrl+] writes a handoff and tells the user how to add conversation context
     const { running } = await h.start()
     h.input.emit('data', Buffer.from('\x1d'))
     assert.ok(existsSync(join(cwd, '.model-ladder', 'HANDOFF.md')))
-    assert.match(h.writes.join(''), /Handoff saved; use \$handoff/)
+    assert.match(h.writes.join(''), /Handoff saved; use/)
     h.exit({ exitCode: 0 })
     await running
   } finally { rmSync(cwd, { recursive: true, force: true }) }
@@ -477,7 +477,7 @@ test('win32-input-mode Ctrl+] triggers the handoff and is not forwarded', async 
   h.input.emit('data', Buffer.from(win32(221, 29, 1) + win32(221, 29, 0)))
   assert.deepEqual(forwarded, [])
   assert.ok(existsSync(join(cwd, '.model-ladder', 'HANDOFF.md')))
-  assert.match(h.writes.join(''), /Handoff saved; use \$handoff/)
+  assert.match(h.writes.join(''), /Handoff saved; use/)
   await done()
 })
 
@@ -538,4 +538,74 @@ test('HUD header hint offers ^\\ and drops it after ctx and the version on narro
   const tight = hudText(state, 50, { now, expanded: true }).split('\n')[0]
   assert.match(tight, /4h\/5h 33%.*2d\/7d 70%/)
   assert.doesNotMatch(tight, /ctx|\(v1/)
+})
+
+test('session finder picks the newest matching TUI rollout without a marker and caches scans', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ml-find-'))
+  const cwd = join(root, 'repo'), other = join(root, 'other')
+  const sessions = join(root, 'home', 'sessions', '2026', '11', '10')
+  mkdirSync(sessions, { recursive: true })
+  const startedAt = Date.now()
+  const uuid = (n) => `00000000-0000-0000-0000-00000000000${n}`
+  const rollout = (n, { dir = cwd, offset = 1000, originator = 'codex-tui' } = {}) => writeFileSync(join(sessions, `rollout-2026-11-10T00-00-0${n}-${uuid(n)}.jsonl`),
+    JSON.stringify({ type: 'session_meta', payload: { id: uuid(n), cwd: dir, originator, timestamp: new Date(startedAt + offset).toISOString() } }) + '\n{"type":"event_msg"}\n')
+  let clock = 0
+  const find = createSessionFinder(cwd, startedAt, { home: () => join(root, 'home'), interval: 3000, now: () => clock })
+  try {
+    assert.equal(find(), null)
+    rollout(1, { dir: other }); rollout(2, { offset: -60000 }); rollout(3, { originator: 'codex_exec' })
+    clock += 3000
+    assert.equal(find(), null)
+    rollout(4, { offset: 1000 }); rollout(5, { offset: 5000 })
+    clock += 1000
+    assert.equal(find(), null, 'not rescanned inside the interval')
+    clock += 3000
+    assert.equal(find(), uuid(5), 'newest of two matches wins')
+    rollout(6, { offset: -1500 })
+    clock += 3000
+    assert.equal(find(), uuid(5), 'an older timestamp does not displace the newest')
+    rollout(7, { offset: 9000 })
+    clock += 3000
+    assert.equal(find(), uuid(7), '/new switches to the newer rollout')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('HUD appends the notice to the header line without overwriting other rows', () => {
+  const now = Date.parse('2026-11-10T00:00:00Z')
+  const state = {
+    agents: [{ phase: 'worker', model: 'gpt-worker', effort: 'low', task: 'fix', activity: 'Command: test', startedAt: new Date(now).toISOString(), endedAt: null }],
+    usage: { fiveHour: 33, fiveHourResetsAt: now / 1000 + 4 * 3600, sevenDay: 70, sevenDayResetsAt: now / 1000 + 2 * 86400 },
+  }
+  const notice = '⚠ session ?'
+  const expanded = hudText(state, 120, { now, expanded: true, notice }).split('\n')
+  assert.match(expanded[0], /4h\/5h 33%.*⚠ session \?$/)
+  assert.match(expanded[1], /model\/effort\s+act\.\/est\.\s+task/)
+  const collapsed = hudText(state, 120, { now, notice }).split('\n')
+  assert.match(collapsed[0], /⚠ session \?$/)
+  assert.match(collapsed[1], /gpt-worker\/low.*worker: fix/)
+  assert.doesNotMatch(collapsed[1], /session/)
+  const tight = hudText(state, 60, { now, notice }).split('\n')[0]
+  assert.match(tight, /4h\/5h 33%.*2d\/7d 70%.*⚠ session \?$/)
+  assert.doesNotMatch(tight, /handoff/)
+  assert.ok(tight.length <= 60)
+})
+
+test('HUD shows ctx ? without context data', () => {
+  const state = { agents: [] }
+  assert.match(hudText(state, 120), /ctx \?/)
+  assert.doesNotMatch(hudText({ ...state, context: { tokens: 50, window: 100 } }, 120), /ctx \?/)
+})
+
+test('session finder reads a rollout whose first line is longer than 16KB', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ml-long-'))
+  const cwd = join(root, 'repo')
+  const sessions = join(root, 'home', 'sessions', '2026', '11', '10')
+  mkdirSync(sessions, { recursive: true })
+  const startedAt = Date.now()
+  const id = '00000000-0000-0000-0000-000000000009'
+  const first = JSON.stringify({ type: 'session_meta', payload: { id, cwd, originator: 'codex-tui', timestamp: new Date(startedAt + 1000).toISOString(), base_instructions: { text: 'x'.repeat(19000) } } })
+  assert.ok(first.length > 16384)
+  writeFileSync(join(sessions, `rollout-2026-11-10T00-00-09-${id}.jsonl`), `${first}\n{"type":"event_msg"}\n`)
+  try { assert.equal(createSessionFinder(cwd, startedAt, { home: () => join(root, 'home') })(), id) }
+  finally { rmSync(root, { recursive: true, force: true }) }
 })

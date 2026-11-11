@@ -93,9 +93,9 @@ Personal files are `~/.claude/model-ladder.json` and `~/.codex/model-ladder.json
 
 | Key | Default | Meaning |
 |---|---|---|
-| `router` | Claude: `sonnet/low`; Codex: `gpt-5.6-terra/low` | Route tasks and diagnose failures. |
-| `verifier` | Claude: `haiku/low`; Codex: `gpt-6-luna/low` | Independently check results. |
-| `tiers` | Haiku, Sonnet, Opus; Codex uses Luna, Terra, Sol | Ordered models and efforts, with `maxEffortJump` limiting effort increases. |
+| `router` | Claude: `sonnet/low`; Codex: `terra/low` | Route tasks and diagnose failures. |
+| `verifier` | Claude: `haiku/low`; Codex: `luna/low` | Independently check results. |
+| `tiers` | Haiku, Sonnet, Opus; Codex uses `luna`, `terra`, `sol` | Ordered models and efforts, with `maxEffortJump` limiting effort increases. Codex family names (`luna`, `terra`, `sol`) resolve automatically to the latest version in `$CODEX_HOME/models_cache.json` (fallback `gpt-6-luna`, `gpt-6.1-terra`, `gpt-6.1-sol`); full names such as `gpt-5.6-terra` are used as written. |
 | `maxAttempts` | `4` | Maximum attempts. |
 | `verify` | Discovered | Existing command or project verification skill. |
 | `protected` | `[]` | Extra paths workers cannot modify. |
