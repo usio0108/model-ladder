@@ -2,32 +2,6 @@
 
 [README](README.zh-TW.md#使用方式) · [English](USAGE.md) · [設計](DESIGN.zh-TW.md)
 
-## 後端預估與校準
-
-耗時範圍以結構化資料存於 live/result/history JSON，面板時間欄顯示「經過/預估」。
-worker、test-writer、verifier 列顯示該 agent 自己的經過時間與自己的預期時長（router、diagnose、final diagnosis 列只顯示經過時間）：取自可比較成功 run（VERIFIED、已完成、未被截斷、90 天內、相同 runtime）的 `forecast.phases` 階段時長中位數，至少有兩筆樣本時依「階段加模型/effort」，之前只依階段；某階段沒有樣本時，改用 router 給的 `workerMinutes` 與 `verifyMinutes`（單次 worker 嘗試與單次驗證的正整數實際分鐘數，隨 plan 帶入，路由後寫入 run 鎖的 `phaseExpected`；Codex 則寫入 `live.expected`）；歷史樣本仍然優先。兩者都沒有時只顯示經過時間。
-Claude Code 即時讀取 run 鎖中的 `phaseExpected`（每個 workflow 邊界寫入），Codex 面板讀取 `live.json` 的 `expected`；已結束的列保留結束時的值。執行中的列經過時間達到或超過預期時長後，顯示的預期時長會分段重新估計：預期值加上最小的整數個步長（步長為 1 分鐘與預期值一半中較大者），使結果大於經過時間（預期 7m 的列在經過 12m 時顯示 14m，經過 14m 時顯示 17.5m，所以分母只在步長邊界變動）。已結束的列保留原本的預期時長，超時仍會顯示為 `✓ 12m/7m`。
-Claude Code band 另外為本 session 每個進行中的背景工作（主 session 自己發出、帶 `run_in_background` 的 Bash 呼叫，或 ladder 以外的非同步 Workflow 啟動；subagent 發出的不算）各顯示一列 `background`：只顯示經過時間，任務欄為 `<kind>: <label>`（`shell` 或 `workflow`）。只在 Claude 沒有執行回合且沒有 ladder agent 執行時顯示，收到該工作的 task-notification 後移除。範圍包含路由、
-實作、自我檢查、測試、獨立驗證與重試風險。無可比較成功歷史時，範圍僅為
-路由模型判斷；有資料後使用實際誤差比例的最小值、中位數與最大值，不宣稱
-信賴區間或準確率。歷史保留原始預估、階段更新、模型、effort、token、實際計時
-與誤差。中斷、DIRECT、錯誤與取消屬於截尾紀錄；失敗紀錄也不作為成功校準證據。
-僅使用最近 90 天、相同執行環境、起始模型與 effort、路由器、驗證器、驗證命令、
-重試上限、路由預估分鐘數與任務模式的紀錄。續跑使用獨立的比較紀錄並保留前一次
-原始預估；缺少可比較的續跑資料時，範圍保持未知。
-
-每個可用訂閱時間窗分別比較預估消耗、剩餘額度與啟用中的 usageGuard 門檻。
-分鐘或 token 不換算成訂閱百分比。證據必須是新鮮的前後觀測、相同來源、帳號識別與重置時間、
-未下降的百分比，並且可歸因、排除帳號同時活動。目前來源無法證明沒有其他帳號活動，
-因此一般回傳 unknown 與原因。過期、缺少時間戳、跨重置、失敗或未完成的資料不作為
-可靠證據；既有 guard 保持有效。階段邊界以整個 run 的消耗範圍保守比較目前餘額，
-不假設線性消耗速率。
-
-Claude 由主控端在每次 Workflow 呼叫前後執行 Node 記錄命令。Workflow 不讀時鐘、
-不匯入模組；結構化 journal 每次接續一個代理，重播先前結果不再呼叫模型。
-階段計時包含該次呼叫內的主控端成本；preflight 到 finish 的總時間包含等待。
-錯誤時未結束的邊界保留為截尾觀測。
-
 ## 執行報告
 
 報告會用 session 的語言整理任務、嘗試、修改檔案、驗證與剩餘限制。
@@ -37,7 +11,7 @@ Claude 由主控端在每次 Workflow 呼叫前後執行 Node 記錄命令。Wor
 | `VERIFIED` | 驗證通過，修改任務會套用已驗證的變更。 |
 | `DIRECT` | 草稿尚未驗證，需由呼叫端處理後交回獨立驗證。 |
 | `DIRTY` | 確認是否以既有未提交變更為基礎執行。 |
-| `NEEDS_INPUT` | 補充任務、確認驗收條件、選擇拆分或處理重疊。 |
+| `NEEDS_INPUT` | 補充任務、確認驗收條件、回答用量風險詢問或處理重疊。 |
 | `STALE_RUN` | 檢查鎖與程序，確認後再授權清理。 |
 | `CONFLICT` | 無法套用 patch，檢查保留的 patch 與 worktree。 |
 | `STOPPED` / `FAILED` / `ERROR` | 依回報原因處理阻礙，再決定是否重跑。 |
@@ -101,7 +75,7 @@ Windows 需使用 PATH 或 `CODEX_BINARY` 指定的原生 `codex.exe`，不接�
 |---|---|
 | DIRECT | 提供實際 `contextTokens`、`contextWindow`，且 router 須判定為小任務。 |
 | 完成 DIRECT | 只修改回傳的 `worktreePath`，再以原始輸入加 `directRun`、`directSummary` 交回。 |
-| 強制一般 ladder | 使用 `forceLadder: true`，同時停用拆分建議。 |
+| 強制一般 ladder | 使用 `forceLadder: true`，停用 DIRECT。 |
 | 執行大型任務 | 不再要求拆分確認；若預估用量可能不足，回答用量風險詢問（`acceptUsageRisk: true` 為繼續）。 |
 | Commit | 明確開啟 `commit: true`，只提交已驗證且不含無關 staged 變更的檔案。 |
 | 逾時續跑 | 以原始輸入加回傳的 `resumeRun` 重試，skill 最多自動續跑兩次。 |
@@ -135,7 +109,7 @@ DIRECT 不代表完成，必須遵守回傳的保護規則，獨立驗證後才�
 | `autoRun` / `band` | `true` | 預設路由與顯示開關。 |
 
 Claude 模型別名會使用可用版本，Codex 的模型 ID 與 effort 請依帳戶調整。
-Claude 外掛選單提供 DIRECT 門檻 20–80，以及拆分門檻 10、20、30、45、60 分鐘，兩者皆可選 `off`。
+Claude 外掛選單提供 DIRECT 門檻 20–80（每 10 一級），另可選 `off`。
 未指定 `verify` 時，Codex 優先使用專案驗證 skill，再尋找既有 npm、pytest、Cargo、Go、Maven 或 Make 檢查。
 
 | 環境變數 | 用途 |
@@ -194,3 +168,16 @@ Claude 用量來自 Band 或 `scripts/usage-statusline.mjs`，只有 Pro/Max 方
 主 session 在原樣保留的驗證附錄前補上目標、決定、已完成工作、下一步與續跑方式，附錄仍為權威紀錄。
 session 無法呼叫模型時保留模板。
 強制終止的 run 可能沒有 checkpoint 或 `result.json`，此時檢查草稿並在額度重設後重啟原始任務，不可杜撰 `resumeRun`。
+
+## 預估與校準
+
+耗時範圍以結構化資料存於 live/result/history JSON，面板時間欄顯示「經過/預估」。
+worker、test-writer、verifier 列顯示該 agent 自己的經過時間與自己的預期時長（router、diagnose、final diagnosis 列只顯示經過時間）：取自可比較成功 run（VERIFIED、已完成、未被截斷、90 天內、相同 runtime）的 `forecast.phases` 階段時長中位數，至少有兩筆樣本時依「階段加模型/effort」，之前只依階段；某階段沒有樣本時，改用 router 給的 `workerMinutes` 與 `verifyMinutes`（單次 worker 嘗試與單次驗證的正整數實際分鐘數，隨 plan 帶入，路由後寫入 run 鎖的 `phaseExpected`；Codex 則寫入 `live.expected`）；歷史樣本仍然優先。兩者都沒有時只顯示經過時間。
+Claude Code 即時讀取 run 鎖中的 `phaseExpected`（每個 workflow 邊界寫入），Codex 面板讀取 `live.json` 的 `expected`；已結束的列保留結束時的值。執行中的列經過時間達到或超過預期時長後，顯示的預期時長會分段重新估計：預期值加上最小的整數個步長（步長為 1 分鐘與預期值一半中較大者），使結果大於經過時間（預期 7m 的列在經過 12m 時顯示 14m，經過 14m 時顯示 17.5m，所以分母只在步長邊界變動）。已結束的列保留原本的預期時長，超時仍會顯示為 `✓ 12m/7m`。
+Claude Code band 另外為本 session 每個進行中的背景工作（主 session 自己發出、帶 `run_in_background` 的 Bash 呼叫，或 ladder 以外的非同步 Workflow 啟動；subagent 發出的不算）各顯示一列 `background`：只顯示經過時間，任務欄為 `<kind>: <label>`（`shell` 或 `workflow`）。只在 Claude 沒有執行回合且沒有 ladder agent 執行時顯示，收到該工作的 task-notification 後移除。
+
+預估範圍包含路由、實作、自我檢查、測試、獨立驗證與重試風險。無可比較成功歷史時，範圍僅為路由模型判斷；有資料後使用實際誤差比例的最小值、中位數與最大值，不宣稱信賴區間或準確率。歷史保留原始預估、階段更新、模型、effort、token、實際計時與誤差。中斷、DIRECT、錯誤與取消屬於截尾紀錄；失敗紀錄也不作為成功校準證據。僅使用最近 90 天、相同執行環境、起始模型與 effort、路由器、驗證器、驗證命令、重試上限、路由預估分鐘數與任務模式的紀錄。續跑使用獨立的比較紀錄並保留前一次原始預估；缺少可比較的續跑資料時，範圍保持未知。
+
+每個可用訂閱時間窗分別比較預估消耗、剩餘額度與啟用中的 usageGuard 門檻。分鐘或 token 不換算成訂閱百分比。證據必須是新鮮的前後觀測、相同來源、帳號識別與重置時間、未下降的百分比，並且可歸因、排除帳號同時活動。目前來源無法證明沒有其他帳號活動，因此一般回傳 unknown 與原因。過期、缺少時間戳、跨重置、失敗或未完成的資料不作為可靠證據；既有 guard 保持有效。階段邊界以整個 run 的消耗範圍保守比較目前餘額，不假設線性消耗速率。
+
+Claude 由主控端在每次 Workflow 呼叫前後執行 Node 記錄命令。Workflow 不讀時鐘、不匯入模組；結構化 journal 每次接續一個代理，重播先前結果不再呼叫模型。階段計時包含該次呼叫內的主控端成本；preflight 到 finish 的總時間包含等待。錯誤時未結束的邊界保留為截尾觀測。

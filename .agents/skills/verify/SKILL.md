@@ -39,7 +39,7 @@ node .agents/skills/verify/verify.mjs handoff
 node .agents/skills/verify/verify.mjs panel
 ```
 
-Run the README's offline suite directly, including the existing Codex runner
+Run the offline unit suite (the same command CI runs) directly, including the existing Codex runner
 integration tests and Claude workflow tests. Preserve its terminal transcript
 and exit code. It can run for several minutes; poll a yielded process session
 until completion instead of launching another suite. Earlier attempts to nest

@@ -1,6 +1,6 @@
 <div align="center">
 
-# model-ladder
+# 🪜 model-ladder
 
 **為每項任務挑選合適的模型，完成後驗證，通過才交付。**
 
@@ -15,19 +15,25 @@
 
 ---
 
-## 功能
+## 簡介
 
 model-ladder 是 [Claude Code](https://code.claude.com) 與 Codex 的外掛。Router 會為每項任務挑選合適的模型，Worker 負責執行，Verifier 檢查結果。通過驗證的變更才會交付。
+
+## 功能
 
 - **隔離的 Git worktree**：每次嘗試各自在獨立 worktree 中執行。
 - **適時升級**：驗證失敗時，可能改用更強的模型或提高 effort。
 - **小任務 DIRECT**：實際 session context 達到設定門檻時，由主 session 處理小任務，完成後仍須獨立驗證。
 - **預估資訊**：每個 agent 列的時間欄顯示該 agent 自己的「經過/預期時長」（例如 `5s/12m`；執行中的 agent 超過預期後，預期時長會分段重新估計，已結束的列保留原值，僅 worker、test-writer、verifier 列；來自先前成功的 run，尚無歷史時採用 router 給的單次分鐘數；router、diagnose、final diagnosis 列只顯示經過時間）；開跑時若預估某個用量時間窗不足或有風險，會在 worker 開始前詢問一次；大型任務不再要求拆分確認。
-- **使用量保護**：偵測到用量停止條件時結束目前 run 並強制停止同機其他已註冊 run。
+- **並行執行**：檔案範圍不重疊的 run 可同時進行，並有重疊檢查與序列化套用結果。
+- **自動路由與分層設定**：session hook 預設啟用 ladder，並支援個人設定與專案覆寫。
+- **受保護的測試**：除非任務明確要求修改測試，worker 不得修改測試。
+- **使用量保護**：偵測到用量停止條件時結束目前 run 並強制停止同機其他已註冊 run，Codex 執行期間每 2 秒檢查一次。
 - **交接文件**：用量停止或執行 `/model-ladder:handoff` 時建立 `.model-ladder/HANDOFF.md`，由主 session 根據對話改寫，並保留程式產生的驗證附錄。
 - **Band / panel / HUD**：透過 Claude band 或 Codex 終端顯示查看角色、用量與保護控制；CLI HUD 能識別 session 時也會顯示 context。
 - **自訂角色指示**：`worker_skills` 與 `verifier_skills` 可指定角色權限內可用的 skills 與工具，Claude Router 則僅能使用 Read、Grep、Glob。
 - **Codex 逾時續跑**：含 checkpoint 的 `TIMEOUT` 結果可用 `resumeRun` 延續草稿，通過驗證後才套用。
+- **選用的 Codex commit**：`commit: true` 會提交已驗證的檔案，保留無關的 staged 變更，並跳過含既有或並行修改的檔案。
 
 ## 安裝
 
@@ -65,7 +71,7 @@ codex plugin add model-ladder@model-ladder
 2. **手動啟動**：Claude Code 使用 `/model-ladder:run <任務>`，Codex 則請 agent 使用 `model-ladder` skill。
 3. **描述任務**：說明目標與預期結果，需要修改測試或只審查不修改時明確提出。
 4. **略過或強制使用**：說「no ladder」可略過，Claude 指令加上 `--ladder` 可強制使用。
-5. **回應詢問**：確認是否處理未提交變更、補充不清楚的任務，並在拆分建議出現時選擇分段、整體執行或停止。
+5. **回應詢問**：確認是否處理未提交變更、補充不清楚的任務，並在用量預估警告時間窗可能不足時選擇繼續或停止。
 6. **查看結果**：通過驗證才算完成，報告會列出修改檔案、驗證結果與剩餘限制，預設不 commit 或 push。
 7. **交接與續跑**：需要時可要求建立交接文件，遇到用量停止則等額度重設，再依 `.model-ladder/HANDOFF.md` 續跑。
 8. **建立專案驗證流程**：model-ladder 內建源自 pstack 的 [`create-verification-skill`](skills/create-verification-skill/SKILL.md) 與 [`maintain-verification-skill`](skills/maintain-verification-skill/SKILL.md)，Codex plugin 也附有[對應版本](codex-skills/)。在 Claude Code 執行 `/model-ladder:create-verification-skill` 或 `/model-ladder:maintain-verification-skill`；在 Codex 請它使用 `create-verification-skill` 或 `maintain-verification-skill` skill。這些 skill 會為目標專案建立或維護專屬驗證 driver。本 repository 已有自己的 [`.agents/skills/verify/SKILL.md`](.agents/skills/verify/SKILL.md)，用途是驗證 model-ladder，不是替任意專案建立通用 driver。來源與授權請見[第三方 notice](NOTICE.zh-TW.md)。

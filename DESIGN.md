@@ -103,7 +103,7 @@ Tests remain protected unless the task requests test changes; explicit `protecte
 Verification may create build artifacts, but existing tracked inputs remain checked.
 The hook is best effort and fails open if Node is unavailable; final diff checks still enforce protection.
 
-## DIRECT, splitting, and recovery
+## DIRECT and recovery
 
 | Feature | Rule |
 |---|---|
@@ -111,7 +111,7 @@ The hook is best effort and fails open if Node is unavailable; final diff checks
 | Claude DIRECT | Main session edits, then a separate verifier checks, with at most three correction rounds. |
 | Codex DIRECT | Caller edits an isolated draft, then `directRun` reclaims scope, checks the baseline, verifies, and applies. |
 | Forecast | Duration ranges, observed phase timings and per-window headroom; elapsed/expected in the panel; one usage-risk confirmation before the worker when a window is insufficient or at risk; no split confirmation. |
-| Force ladder | `forceLadder` disables DIRECT and split suggestions. |
+| Force ladder | `forceLadder` disables DIRECT. |
 | Timeout | Idle time without output, configured by `timeoutMs`. |
 | Codex resume | Validate checkout, task, acceptance, and configuration before continuing a draft in a fresh worktree. |
 

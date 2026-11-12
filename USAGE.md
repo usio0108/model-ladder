@@ -11,7 +11,7 @@ Reports summarize the task, attempts, changed files, verification, and remaining
 | `VERIFIED` | Verification passed; editing tasks apply the verified change. |
 | `DIRECT` | An unverified draft needs caller work and independent verification. |
 | `DIRTY` | Confirm whether to build on existing uncommitted changes. |
-| `NEEDS_INPUT` | Clarify the task, approve criteria, choose a split, or resolve an overlap. |
+| `NEEDS_INPUT` | Clarify the task, approve criteria, answer a usage-risk question, or resolve an overlap. |
 | `STALE_RUN` | Inspect the listed locks and processes before authorizing cleanup. |
 | `CONFLICT` | The patch could not apply; inspect the retained patch and worktree. |
 | `STOPPED` / `FAILED` / `ERROR` | Read the reason and resolve the blocker before retrying. |
@@ -74,7 +74,7 @@ Pruning removes completed artifacts but preserves active runs, conflicts, patche
 |---|---|
 | DIRECT | Supply actual `contextTokens` and `contextWindow`; the router must also judge the task small. |
 | Complete DIRECT | Edit only the returned `worktreePath`, then resubmit the original input with `directRun` and `directSummary`. |
-| Force normal ladder | Use `forceLadder: true`, which also disables split suggestions. |
+| Force normal ladder | Use `forceLadder: true`, which disables DIRECT. |
 | Run a large task | No split confirmation is required; if the forecast says usage may run out, answer the usage-risk question (`acceptUsageRisk: true` continues). |
 | Commit | Explicitly enable `commit: true` to commit verified files without unrelated staged changes. |
 | Resume a timeout | Reuse the original input and returned `resumeRun`; the skill retries automatically at most twice. |
@@ -108,7 +108,7 @@ Personal files are `~/.claude/model-ladder.json` and `~/.codex/model-ladder.json
 | `autoRun` / `band` | `true` | Default routing and display controls. |
 
 Claude model aliases follow available versions; configure Codex model IDs and efforts for your account.
-Claude's plugin picker offers DIRECT values 20–80 and split values 10, 20, 30, 45, or 60 minutes, plus `off`.
+Claude's plugin picker offers DIRECT values 20–80 in steps of 10, plus `off`.
 Without explicit `verify`, Codex prefers a project verify skill, then discovers existing npm, pytest, Cargo, Go, Maven, or Make checks.
 
 | Environment variable | Effect |
@@ -168,11 +168,14 @@ The main session adds the goal, decisions, completed work, next steps, and resum
 If the session cannot call a model, keep the template as the fallback.
 A force-killed run may lack a checkpoint or `result.json`; inspect its draft and restart the original task after quota reset instead of inventing `resumeRun`.
 
+## Forecasts and calibration
+
 Duration forecasts are stored in live/result/history JSON; the panel time column shows elapsed/expected.
 A worker, test-writer or verifier row shows its own elapsed time over its own expected duration (router, diagnose and final-diagnosis rows show elapsed time only): the median phase duration from `forecast.phases` of comparable successful runs (VERIFIED, completed, uncensored, within 90 days, same runtime), keyed by phase plus model/effort once at least two runs have it and by phase alone before that. With no samples for a phase, the router's `workerMinutes` and `verifyMinutes` (positive integer wall-clock minutes for one worker attempt and one verification, carried in the plan and written into the run lock's `phaseExpected` after routing; Codex writes them into `live.expected`) stand in for it; history samples keep priority. Without either the row shows elapsed time only.
 Claude Code reads the table live from the run lock's `phaseExpected` (written at each workflow boundary) and the Codex panel reads `expected` in `live.json`; a finished row keeps the value it ended with. Once a running row has been running at least as long as its expected duration, the shown expected duration is recalibrated in steps: the expected value plus the smallest whole number of steps of max(1 minute, half the expected value) that lands above the elapsed time (7m expected shows 14m at 12m elapsed and 17.5m at 14m, so the denominator changes only at step boundaries). A finished row keeps its original expected duration, so an overrun stays visible as `✓ 12m/7m`.
 The Claude Code band also shows one `background` row per in-flight background task of this session (a Bash call with `run_in_background`, or an async Workflow launch other than the ladder's own) that the main session started, not a subagent: elapsed time only, with the task `<kind>: <label>` (`shell` or `workflow`). The rows show only while Claude is not running a turn and no ladder agent runs, and each leaves when its task-notification arrives.
-They cover routing, implementation and self-checks, test commands, independent
+
+Forecast ranges cover routing, implementation and self-checks, test commands, independent
 verification and retry risk. Router ranges are uncalibrated judgments until
 comparable successful histories supply empirical min/median/max error ratios.
 Those ranges are observations, not confidence intervals or accuracy claims.
