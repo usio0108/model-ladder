@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { TEST_PATTERNS } from '../hooks/guard.mjs'
-import { legalMoves, pickMove, isCell, isDirect, usageRisk } from './ladder-rules.mjs'
+import { legalMoves, pickMove, isCell, isDirect, usageRisk, dropUnachievableAcceptance } from './ladder-rules.mjs'
 import { agentExpected } from '../hooks/band/rows.mjs'
 import { agentExpectations, history, startForecast, routeForecast, updateForecast, finishForecast, withRouterMinutes } from './forecast.mjs'
 import { readCodexContext, readCodexUsage } from './codex-usage.mjs'
@@ -18,6 +18,8 @@ import { loadLayered } from './config.mjs'
 import { claimScope, clearStale, createLock, readLocks, releaseLock, withMutex } from './runs.mjs'
 import { forceStopRuns, registerRun, unregisterRun } from './usage-guard.mjs'
 import { git, snapshot, changed, protectedChange, makeWorktree, applyResult, removeOwned } from './codex-worktree.mjs'
+
+const routeSchemaName = (direct, withAcceptance) => `${direct ? 'directRoute' : 'route'}${withAcceptance ? 'WithAcceptance' : ''}`
 
 export const DEFAULTS = {
   router: { model: 'terra', effort: 'low' },
@@ -261,7 +263,7 @@ export async function runLadder(input, options = {}) {
       if (sourceResult.status !== (input.directRun ? 'DIRECT' : 'STOPPED') || sourceResult.runId !== sourceId || sourceResult.worktreePath !== sourceCwd ||
         git(sourceCwd, 'rev-parse', '--show-toplevel').replaceAll('\\', '/').toLowerCase() !== sourceCwd.replaceAll('\\', '/').toLowerCase() ||
         git(sourceCwd, 'rev-parse', 'HEAD') !== baseCommit) throw new Error('Checkpoint is not an owned interrupted attempt.')
-      validate(checkpoint.route, Object.hasOwn(checkpoint.route, 'small') ? SCHEMAS.directRoute : SCHEMAS.route)
+      validate(checkpoint.route, SCHEMAS[routeSchemaName(Object.hasOwn(checkpoint.route, 'small'), Object.hasOwn(checkpoint.route, 'acceptance'))])
       checkpoint.tree = snapshot(sourceCwd, run, 'resume')
     }
     const context = input.contextTokens !== undefined || input.contextWindow !== undefined
@@ -278,12 +280,13 @@ export async function runLadder(input, options = {}) {
       if (phase === 'worker') prompt += '\nEDITING RULES: edit files with apply_patch, never through an interpreter one-off (python/node -e/sed scripts) whose failure can be silent. If Python is genuinely needed, run it with `uv run` (ephemeral); if the project did not already use Python, delete everything that run created (.venv, uv.lock, __pycache__, scratch scripts) before reporting. Before reporting done, run `git status --porcelain --untracked-files=all` in the worktree and confirm every file you claim in filesChanged shows a worker change (second column not a space, or ??).'
       if (phase === 'worker') prompt += `\nRun the provided VERIFY command yourself when available${verifySkill ? `, or follow the existing project verification skill at ${verifySkill}` : ''}. Report the actual self-check commands and results in summary; do not invent a passing check or acceptance criteria. Verification by another role remains required.`
       if (phase === 'route' && directContext) prompt += '\nAlso return small (boolean) and smallReason. small is true only for a trivial, bounded task the calling session can implement safely. Context size is supplied by the caller; do not infer or invent it.'
+      if (phase === 'route') prompt += `\nacceptance must be limited to conditions a worker can meet in an isolated worktree and a verifier can judge from the diff. Never put commit, push, release, tag or clean-working-tree conditions in acceptance: the worker may not commit or stage, and finishing happens outside the attempt.${acceptance.length ? ' The user already supplied acceptance; do not add to it.' : ' Return acceptance as a list of checkable done criteria, empty if the verify command alone defines done.'}`
       if (phase === 'route') prompt += '\nReturn workerMinutes and verifyMinutes as positive integer wall-clock minutes for ONE worker attempt (implementation and self-checks) and ONE independent verification.'
       if (phase === 'worker' && route.allowTests) prompt += '\nTEST-WRITER ROLE: the user requested test changes. Tests must check real behavior; never weaken existing tests. Change code under test only if the task requests it. Explicit protected paths and verification inputs remain forbidden.'
       checkUsage()
       return role(phase, cell, input.task, async (agent) => {
         const response = await codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs: config.timeoutMs, signal: controller.signal, executable: options.executable,
-          onActivity: (activity) => { agent.activity = activity; publish() }, ...(phase === 'route' && directContext && { schema: SCHEMAS.directRoute }), ...(reportSkills && { schema: SCHEMAS.workerWithSkills }) })
+          onActivity: (activity) => { agent.activity = activity; publish() }, ...(phase === 'route' && (directContext || !acceptance.length) && { schema: SCHEMAS[routeSchemaName(directContext, !acceptance.length)] }), ...(reportSkills && { schema: SCHEMAS.workerWithSkills }) })
         usage.push({ phase, cell: label(cell), turns: response.usage })
         return response.value
       })
@@ -292,7 +295,9 @@ export async function runLadder(input, options = {}) {
 Also return estimatedMinutes (most likely), optimisticMinutes and pessimisticMinutes: positive integer wall-clock minutes for the FULL run from routing through implementation, worker self-checks, test commands, independent verification and diagnosis/retry risk. Give an honest ordered range, not a guarantee.`)
     const lowest = { model: config.tiers[0].model, effort: config.tiers[0].efforts[0] }
     let cell = checkpoint?.cell ?? (isCell(route, config.tiers) ? { model: route.model, effort: route.effort } : lowest)
-    result.plan = { ...route, start: label(cell), verify: verify ?? verifySkill, acceptance }
+    // The user's own acceptance is used as given; only the router's proposal is filtered.
+    const planAcceptance = acceptance.length ? acceptance : dropUnachievableAcceptance(route.acceptance)
+    result.plan = { ...route, start: label(cell), verify: verify ?? verifySkill, acceptance: planAcceptance }
     if (route.question) {
       result.status = 'NEEDS_INPUT'
       result.message = route.question
@@ -350,7 +355,7 @@ Also return estimatedMinutes (most likely), optimisticMinutes and pessimisticMin
       attempts.push(attempt)
       let worker, verdict, tree
       try {
-        worker = input.directRun && number === 1 ? { status: 'done', summary: input.directSummary, blockedReason: null } : await ask('worker', cell, cwd, `Implement exactly one model-ladder attempt.\nTASK\n${input.task}\nGOAL\n${route.goal}\nSCOPE\n${JSON.stringify(route.scope)}\nACCEPTANCE\n${JSON.stringify(acceptance)}\nVERIFY\n${verify ?? 'Independent verifier follows project verify skill or user acceptance'}\nHINT FROM FAILED ATTEMPTS\n${hint}\nPREVIOUS RESULTS\n${JSON.stringify(attempts.slice(0, -1).map(({ cell, reason }) => ({ cell, reason })))}\nWork only in this worktree. The user's existing uncommitted changes are already present; preserve them. Do not commit, change branches, reset, or edit git metadata. ${route.readOnly ? 'READ ONLY. Make no file changes. Your summary must contain the full report.' : `Do not modify protected paths matching ${JSON.stringify(protection)}. Tests define expected behavior. Return a concise summary and status done, or blocked with blockedReason.`} Include concise model handoff context in summary: progress, decisions, user constraints supplied here, cautions, failed approaches, and next steps. Separate what you verified from claims or unfinished work; do not infer parent conversation context.`, route.readOnly ? 'read-only' : 'workspace-write')
+        worker = input.directRun && number === 1 ? { status: 'done', summary: input.directSummary, blockedReason: null } : await ask('worker', cell, cwd, `Implement exactly one model-ladder attempt.\nTASK\n${input.task}\nGOAL\n${route.goal}\nSCOPE\n${JSON.stringify(route.scope)}\nACCEPTANCE\n${JSON.stringify(planAcceptance)}\nVERIFY\n${verify ?? 'Independent verifier follows project verify skill or user acceptance'}\nHINT FROM FAILED ATTEMPTS\n${hint}\nPREVIOUS RESULTS\n${JSON.stringify(attempts.slice(0, -1).map(({ cell, reason }) => ({ cell, reason })))}\nWork only in this worktree. The user's existing uncommitted changes are already present; preserve them. Do not commit, change branches, reset, or edit git metadata. ${route.readOnly ? 'READ ONLY. Make no file changes. Your summary must contain the full report.' : `Do not modify protected paths matching ${JSON.stringify(protection)}. Tests define expected behavior. Return a concise summary and status done, or blocked with blockedReason.`} Include concise model handoff context in summary: progress, decisions, user constraints supplied here, cautions, failed approaches, and next steps. Separate what you verified from claims or unfinished work; do not infer parent conversation context.`, route.readOnly ? 'read-only' : 'workspace-write')
         if (worker.skills) attempt.skills = worker.skills
         if (git(cwd, 'rev-parse', 'HEAD') !== baseCommit) throw new Error('Worker changed the base commit')
         tree = snapshot(cwd, run, `worker-${number}`)
@@ -370,7 +375,7 @@ Also return estimatedMinutes (most likely), optimisticMinutes and pessimisticMin
             })
           }
           if (!verdict || verdict.pass) {
-            verdict = await ask('verify', config.verifier, cwd, `Independently verify every user acceptance criterion against repository contents and actual diff. ${verifySkill ? `Follow the existing project verification skill at ${verifySkill} and run its checks. Resolve paths referenced by that skill relative to the directory containing its SKILL.md.` : ''} Do not edit source, tests or verification inputs. Build artifacts from verification checks are allowed. Do not trust the worker summary. If the task changes tests, check that they assert real behavior and do not weaken existing tests, and that code under test changed only when requested.\nTASK\n${input.task}\nACCEPTANCE\n${JSON.stringify(acceptance.length ? acceptance : [input.task])}\nBASE TREE (Git tree object, not a commit or HEAD)\n${baseTree}\nWORKER REPORT\n${worker.summary}\n${route.readOnly ? 'This is a report task; inspect cited sources and judge the report.' : `The base tree snapshots the original checkout, including pre-existing dirty changes. Compare the attempt against that tree with git diff ${baseTree} --; do not use HEAD as the baseline or count pre-existing changes as attempt changes. Check git status --short and inspect untracked files too, since git diff omits them.`}`, route.readOnly ? 'read-only' : 'workspace-write')
+            verdict = await ask('verify', config.verifier, cwd, `Independently verify every user acceptance criterion against repository contents and actual diff. ${verifySkill ? `Follow the existing project verification skill at ${verifySkill} and run its checks. Resolve paths referenced by that skill relative to the directory containing its SKILL.md.` : ''} Do not edit source, tests or verification inputs. Build artifacts from verification checks are allowed. Do not trust the worker summary. If the task changes tests, check that they assert real behavior and do not weaken existing tests, and that code under test changed only when requested.\nTASK\n${input.task}\nACCEPTANCE\n${JSON.stringify(planAcceptance.length ? planAcceptance : [input.task])}\nBASE TREE (Git tree object, not a commit or HEAD)\n${baseTree}\nWORKER REPORT\n${worker.summary}\n${route.readOnly ? 'This is a report task; inspect cited sources and judge the report.' : `The base tree snapshots the original checkout, including pre-existing dirty changes. Compare the attempt against that tree with git diff ${baseTree} --; do not use HEAD as the baseline or count pre-existing changes as attempt changes. Check git status --short and inspect untracked files too, since git diff omits them.`}`, route.readOnly ? 'read-only' : 'workspace-write')
           }
           const after = snapshot(cwd, run, `verify-${number}`)
           const tampered = protectedChange(cwd, baseTree, after, protection) ?? changedNpmScripts(cwd, baseTree, after, verify)

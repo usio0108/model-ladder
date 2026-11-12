@@ -34,6 +34,9 @@ export function validate(value, schema, path = 'output') {
 
 // Request this extra decision only when the caller supplies actual context data.
 SCHEMAS.directRoute = object({ ...SCHEMAS.route.properties, small: { type: 'boolean' }, smallReason: string })
+// Asked only when the user gave no acceptance: the router proposes it, and the runner drops items a worker cannot meet.
+SCHEMAS.routeWithAcceptance = object({ ...SCHEMAS.route.properties, acceptance: strings })
+SCHEMAS.directRouteWithAcceptance = object({ ...SCHEMAS.directRoute.properties, acceptance: strings })
 SCHEMAS.workerWithSkills = object({ ...SCHEMAS.worker.properties, skills: { type: 'array', items: object({ name: string, applies: { type: 'boolean' }, available: { type: 'boolean' }, used: { type: 'boolean' }, note: string }) } })
 
 export class EnvironmentError extends Error {}

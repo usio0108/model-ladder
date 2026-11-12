@@ -190,4 +190,31 @@ function hardLimit(text) {
   return { message, resets }
 }
 
-export { legalMoves, defaultMove, pickMove, isCell, isDirect, protectedPatterns, ARTIFACTS, durationForecast, remainingForecast, assessUsage, consumptionEvidence, calibrationError, usageRisk }
+// Workers and verifiers may not commit, stage or push, so a router-written acceptance item that needs a commit, a push,
+// a tag, a release or a clean working tree fails every attempt. Items that forbid those actions stay.
+const NEGATED = /\b(?:no|not|never|without|none|nothing|neither)\b|n't\b/i
+const NEEDS_FINISH = [
+  /\b(?:committed|pushed|tagged|staged|published)\b/i,
+  /\bcommits?\b(?!\s+(?:message|hook|history|log|style|convention))[^.;]{0,40}\b(?:is|are|exists?|created?|made|recorded|present|done|included)\b/i,
+  /\b(?:create|make|record|add)\w*\s+(?:a |the |one |new )*commits?\b/i,
+  /\b(?:git\s+tag|tag\s+v?\d[\w.-]*|tags?\b[^.;]{0,30}\b(?:created?|exists?|pushed|present))/i,
+  /\bpush(?:es)?\b[^.;]{0,30}\b(?:is|are|succeeds?|done|made|completed?|to (?:the )?(?:remote|origin))\b/i,
+  /\breleases?\b(?!\s+(?:notes?|script|workflow|config|docs?|checklist|process))[^.;]{0,40}\b(?:is|are|exists?|created?|made|published|done|present)\b/i,
+]
+const NEEDS_CLEAN_TREE = [
+  /\b(?:working\s+(?:tree|directory|copy)|work\s?tree|git\s+status|git\s+tree|repo(?:sitory)?)\b[^.;]{0,40}\bclean\b/i,
+  /\bclean\s+(?:working\s+(?:tree|directory|copy)|work\s?tree|git\s+status|status|tree)\b/i,
+  /\bno\s+(?:uncommitted|unstaged|untracked|pending)\s+(?:changes|files)\b/i,
+  /\bnothing\s+(?:left\s+)?(?:to commit|uncommitted)\b/i,
+  /\bgit\s+status\b[^.;]{0,40}\b(?:empty|nothing)\b/i,
+]
+
+function dropUnachievableAcceptance(items) {
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const text = String(item)
+    if (NEEDS_CLEAN_TREE.some((re) => re.test(text))) return false
+    return NEGATED.test(text) || !NEEDS_FINISH.some((re) => re.test(text))
+  })
+}
+
+export { legalMoves, defaultMove, pickMove, isCell, isDirect, protectedPatterns, ARTIFACTS, durationForecast, remainingForecast, assessUsage, consumptionEvidence, calibrationError, usageRisk, dropUnachievableAcceptance }

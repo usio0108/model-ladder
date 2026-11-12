@@ -197,6 +197,33 @@ function hardLimit(text) {
   const resets = message.match(/\bresets?\s+(?:at\s+|in\s+)?([^·\n;|]+)/i)?.[1]?.replace(/[\s.]+$/, '') || null
   return { message, resets }
 }
+
+// Workers and verifiers may not commit, stage or push, so a router-written acceptance item that needs a commit, a push,
+// a tag, a release or a clean working tree fails every attempt. Items that forbid those actions stay.
+const NEGATED = /\b(?:no|not|never|without|none|nothing|neither)\b|n't\b/i
+const NEEDS_FINISH = [
+  /\b(?:committed|pushed|tagged|staged|published)\b/i,
+  /\bcommits?\b(?!\s+(?:message|hook|history|log|style|convention))[^.;]{0,40}\b(?:is|are|exists?|created?|made|recorded|present|done|included)\b/i,
+  /\b(?:create|make|record|add)\w*\s+(?:a |the |one |new )*commits?\b/i,
+  /\b(?:git\s+tag|tag\s+v?\d[\w.-]*|tags?\b[^.;]{0,30}\b(?:created?|exists?|pushed|present))/i,
+  /\bpush(?:es)?\b[^.;]{0,30}\b(?:is|are|succeeds?|done|made|completed?|to (?:the )?(?:remote|origin))\b/i,
+  /\breleases?\b(?!\s+(?:notes?|script|workflow|config|docs?|checklist|process))[^.;]{0,40}\b(?:is|are|exists?|created?|made|published|done|present)\b/i,
+]
+const NEEDS_CLEAN_TREE = [
+  /\b(?:working\s+(?:tree|directory|copy)|work\s?tree|git\s+status|git\s+tree|repo(?:sitory)?)\b[^.;]{0,40}\bclean\b/i,
+  /\bclean\s+(?:working\s+(?:tree|directory|copy)|work\s?tree|git\s+status|status|tree)\b/i,
+  /\bno\s+(?:uncommitted|unstaged|untracked|pending)\s+(?:changes|files)\b/i,
+  /\bnothing\s+(?:left\s+)?(?:to commit|uncommitted)\b/i,
+  /\bgit\s+status\b[^.;]{0,40}\b(?:empty|nothing)\b/i,
+]
+
+function dropUnachievableAcceptance(items) {
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const text = String(item)
+    if (NEEDS_CLEAN_TREE.some((re) => re.test(text))) return false
+    return NEGATED.test(text) || !NEEDS_FINISH.some((re) => re.test(text))
+  })
+}
 // </pure>
 
 const VERIFY_SKILL = "Follow the project's verify skill at .claude/skills/verify/SKILL.md"
@@ -378,7 +405,7 @@ Also return:
 - goal: the task as one sentence a stranger could execute.
 - scope: files you expect to change.
 - verify: ${verifyKnown}
-- acceptance: checkable done criteria, one per item. ${args.acceptance?.length ? 'The user already gave them; return them unchanged.' : 'Empty if the verify command alone defines done.'}
+- acceptance: checkable done criteria, one per item, limited to what a worker can do in an isolated worktree and a verifier can judge from the diff. Never list commit, push, release, tag or clean-working-tree conditions: the worker may not commit or stage, and finishing is handled outside the attempt. ${args.acceptance?.length ? 'The user already gave them; return them unchanged.' : 'Empty if the verify command alone defines done.'}
 - allowTests: true only when the task itself is to write or change tests. A bug fix is not: the tests define the expected behavior.
 - question: if the task is too vague to act on (no clear outcome, several very different readings), the one question that would settle it. Otherwise null. A worker would guess, and passing tests would hide the guess.
 - small: true when the task touches one or two files and its design is already given (for example "implement this function as described"), so a capable model would finish it in one pass. Otherwise false.
@@ -394,7 +421,7 @@ Also return:
   const lowest = { model: config.tiers[0].model, effort: config.tiers[0].efforts[0] }
   const start = isCell(r, config.tiers) ? { model: r.model, effort: r.effort } : lowest
   const verify = config.verify ?? (args.hasVerifySkill ? VERIFY_SKILL : r.verify)
-  const acceptance = args.acceptance?.length ? args.acceptance : r.acceptance
+  const acceptance = args.acceptance?.length ? args.acceptance : dropUnachievableAcceptance(r.acceptance)
   const startReason = isCell(r, config.tiers) ? r.reason : `Router picked ${label(r)}, not in the grid; starting at ${label(lowest)}`
   const direct = isDirect(r.small === true, args.contextTokens, args.forceLadder, args.contextWindow, args.directThreshold)
   return {

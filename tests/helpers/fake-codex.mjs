@@ -37,6 +37,7 @@ if (scenario.environment === phase) { console.error(scenario.environmentMessage 
 if (scenario.warning) console.error('sandbox initialized normally')
 let output
 if (phase === 'route') output = {model:scenario.invalidStart ? 'no-model' : 'cheap',effort:'low',reason:'small task',goal:'Fix greeting',scope:['greeting.mjs'],allowTests:scenario.allowTests ?? false,readOnly:scenario.routerReadOnly ?? scenario.readOnly ?? false,question:scenario.question ?? null,estimatedMinutes:scenario.estimatedMinutes ?? 5,optimisticMinutes:scenario.optimisticMinutes ?? scenario.estimatedMinutes ?? 5,pessimisticMinutes:scenario.pessimisticMinutes ?? scenario.estimatedMinutes ?? 5,workerMinutes:scenario.workerMinutes ?? 2,verifyMinutes:scenario.verifyMinutes ?? 1}
+if (phase === 'route' && schema.properties.acceptance) output.acceptance = scenario.routerAcceptance ?? []
 if (phase === 'route' && schema.properties.small) Object.assign(output, { small: true, smallReason: 'Small fixture task' })
 if (phase === 'worker') {
   if (scenario.activity) process.stdout.write(`${JSON.stringify({ type: 'item.started', item: { type: 'command_execution', command: scenario.activity } })}\n`)

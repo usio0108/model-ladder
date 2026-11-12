@@ -273,6 +273,23 @@ test('without existing verification the user must supply acceptance', async () =
   assert.ok(calls(dir).some((c) => c.phase === 'verify'))
   cleaned(dir)
 })
+test('router acceptance that needs a commit or a clean tree is dropped; user acceptance is untouched', async () => {
+  const routerAcceptance = ['Greeting is Welcome', 'Changes are committed', 'Working tree is clean after commit', 'No commit is made']
+  const dir = fixture({ routerAcceptance })
+  const result = await run(dir)
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  assert.deepEqual(result.plan.acceptance, ['Greeting is Welcome', 'No commit is made'])
+  assert.match(calls(dir)[0].prompt, /Never put commit, push, release, tag or clean-working-tree conditions in acceptance/)
+  assert.ok(calls(dir).find((c) => c.phase === 'worker').prompt.includes('No commit is made'))
+  assert.ok(!calls(dir).find((c) => c.phase === 'worker').prompt.includes('Changes are committed'))
+  cleaned(dir)
+  const own = fixture({ routerAcceptance })
+  const user = ['Changes are committed']
+  const kept = await run(own, { acceptance: user })
+  assert.deepEqual(kept.plan.acceptance, user)
+  assert.match(calls(own)[0].prompt, /The user already supplied acceptance/)
+  cleaned(own)
+})
 test('vague task asks its clarifying question', async () => {
   const dir = fixture({ question: 'Which greeting?' })
   assert.equal((await run(dir)).message, 'Which greeting?')
