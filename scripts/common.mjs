@@ -34,7 +34,7 @@ export function ensureGitExclude(cwd = process.cwd()) {
 export const repoRoot = () => git(process.cwd(), 'rev-parse', '--show-toplevel')
 // Run files live outside .git and .claude: Claude Code asks permission to change files in both.
 // Only small shared files stay here: runs/ (one lock per active run, see runs.mjs), history.jsonl,
-// HANDOFF.md, live.json, usage.json.
+// live.json, usage.json, context.json, HANDOFF.md.
 export const runDir = (root) => join(root, '.model-ladder')
 // Per-run artifacts (Codex attempt worktrees, logs, snapshots, checkpoints, result.json) live in the
 // system temp dir, one folder per repository, so they never fill the repo's .model-ladder/.

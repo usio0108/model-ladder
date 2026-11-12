@@ -39,22 +39,21 @@ node .agents/skills/verify/verify.mjs handoff
 node .agents/skills/verify/verify.mjs panel
 ```
 
-Run the offline unit suite (the same command CI runs) directly, including the existing Codex runner
+Run the offline unit suite directly, including the existing Codex runner
 integration tests and Claude workflow tests. Preserve its terminal transcript
 and exit code. It can run for several minutes; poll a yielded process session
 until completion instead of launching another suite. Earlier attempts to nest
 this suite in a synchronous wrapper stalled under the verifier, so this helper
-does not wrap the suite. `handoff` invokes the real
-`watch.mjs --handoff` CLI with active and quota-stopped persisted fixtures,
-asserts the warning and parsed resume JSON, and preserves both generated files.
-`panel` separately runs
+does not wrap the suite. `handoff` invokes the real `watch.mjs --handoff` CLI
+with active and quota-stopped persisted fixtures, asserts the warning and parsed
+resume JSON, and preserves both generated files. `panel` separately runs
 `node tests/e2e/codex-live-smoke.mjs`, which drives a real watcher and real Git
-worktrees using the existing fake-Codex executable at the model-process boundary.
-Require the harness's `PASS: VERIFIED` message and exit code 0.
-Run `panel` when changing watcher or display behavior and require a normal
-exit code of 0. On Windows, killing a child with `SIGINT` can force termination
-instead of delivering Node's signal event. Use the harness's portable shutdown
-path; never treat a null exit code as success or waive the lifecycle check.
+worktrees using the existing fake-Codex executable at the model-process
+boundary. Require the harness's `PASS: VERIFIED` message and exit code 0. Run
+`panel` when changing watcher or display behavior and require a normal exit code
+of 0. On Windows, killing a child with `SIGINT` can force termination instead of
+delivering Node's signal event. Use the harness's portable shutdown path; never
+treat a null exit code as success or waive the lifecycle check.
 
 For a focused feature, use the exact command in its map entry. Capture command,
 stdout, stderr, exit status, and observable file effects. Passing old tests alone

@@ -469,7 +469,7 @@ export function readInput(argv = process.argv.slice(2)) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
-    process.stdout.write('Usage: node codex-run.mjs <task>\nOr: node codex-run.mjs --input <UTF-8 JSON file>\nOr pass JSON on stdin: {task, acceptance?: string[], allowDirty?: boolean, resumeRun?: string, clearStale?: true | runId, forceLadder?: boolean, contextTokens?: number, contextWindow?: number, directRun?: string, directSummary?: string, acceptUsageRisk?: boolean}\nConfiguration: ~/.codex/model-ladder.json (personal, e.g. usageGuard), then .codex/model-ladder.json (project, wins). Run locks (runs/), history, live state and HANDOFF.md: .model-ladder/. Per-run worktrees, logs, checkpoints and result.json: <system temp>/model-ladder/<repo hash>/.\n')
+    process.stdout.write('Usage: node codex-run.mjs <task>\nOr: node codex-run.mjs --input <UTF-8 JSON file>\nOr pass JSON on stdin: {task, acceptance?: string[], allowDirty?: boolean, resumeRun?: string, clearStale?: true | runId, forceLadder?: boolean, contextTokens?: number, contextWindow?: number, directRun?: string, directSummary?: string, acceptUsageRisk?: boolean}\nConfiguration: ~/.codex/model-ladder.json (personal, e.g. usageGuard), then .codex/model-ladder.json (project, wins). .model-ladder/ holds only runs/, history.jsonl, live.json, usage.json, context.json and HANDOFF.md. Per-run worktrees, logs, checkpoints and result.json: <system temp>/model-ladder/<repo hash>/.\n')
     process.exit(0)
   }
   const controller = new AbortController()

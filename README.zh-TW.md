@@ -24,7 +24,7 @@ model-ladder 是 [Claude Code](https://code.claude.com) 與 Codex 的外掛。Ro
 - **隔離的 Git worktree**：每次嘗試各自在獨立 worktree 中執行。
 - **適時升級**：驗證失敗時，可能改用更強的模型或提高 effort。
 - **小任務 DIRECT**：實際 session context 達到設定門檻時，由主 session 處理小任務，完成後仍須獨立驗證。
-- **預估資訊**：每個 agent 列的時間欄顯示該 agent 自己的「經過/預期時長」（例如 `5s/12m`；執行中的 agent 超過預期後，預期時長會分段重新估計，已結束的列保留原值，僅 worker、test-writer、verifier 列；來自先前成功的 run，尚無歷史時採用 router 給的單次分鐘數；router、diagnose、final diagnosis 列只顯示經過時間）；開跑時若預估某個用量時間窗不足或有風險，會在 worker 開始前詢問一次；大型任務不再要求拆分確認。
+- **預估資訊**：每個 agent 列的時間欄顯示該 agent 自己的「經過/預期時長」（例如 `5s/12m`；執行中的 agent 超過預期後，預期時長會分段重新估計，已結束的列保留原值，僅 worker、test-writer、verifier 列；來自先前成功的 run，尚無歷史時採用 router 給的單次分鐘數；router、diagnose、final diagnosis 列只顯示經過時間）；開跑時若預估某個用量時間窗不足或有風險，會在 worker 開始前詢問一次。
 - **並行執行**：檔案範圍不重疊的 run 可同時進行，並有重疊檢查與序列化套用結果。
 - **自動路由與分層設定**：session hook 預設啟用 ladder，並支援個人設定與專案覆寫。
 - **受保護的測試**：除非任務明確要求修改測試，worker 不得修改測試。

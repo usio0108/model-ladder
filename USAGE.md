@@ -75,7 +75,7 @@ Pruning removes completed artifacts but preserves active runs, conflicts, patche
 | DIRECT | Supply actual `contextTokens` and `contextWindow`; the router must also judge the task small. |
 | Complete DIRECT | Edit only the returned `worktreePath`, then resubmit the original input with `directRun` and `directSummary`. |
 | Force normal ladder | Use `forceLadder: true`, which disables DIRECT. |
-| Run a large task | No split confirmation is required; if the forecast says usage may run out, answer the usage-risk question (`acceptUsageRisk: true` continues). |
+| Run a large task | If the forecast says usage may run out, answer the usage-risk question (`acceptUsageRisk: true` continues). |
 | Commit | Explicitly enable `commit: true` to commit verified files without unrelated staged changes. |
 | Resume a timeout | Reuse the original input and returned `resumeRun`; the skill retries automatically at most twice. |
 
@@ -142,6 +142,7 @@ Basic fields and controls are shown in the [README](README.md#band-claude-code).
 | Codex controls | Enter `g`, `t 90`, `h`, or `q`, followed by Enter. |
 | CLI controls | `watch.mjs` accepts `--guard on|off`, `--threshold 1-100`, and `--handoff`; add `--set` to save and exit without watching. In Codex you can also just ask, for example "set the model-ladder threshold to 80". |
 
+The Claude Code band also shows one `background` row per in-flight background task of this session (a Bash call with `run_in_background`, or an async Workflow launch other than the ladder's own) that the main session started, not a subagent: elapsed time only, with the task `<kind>: <label>` (`shell` or `workflow`). The rows show only while Claude is not running a turn and no ladder agent runs, and each leaves when its task-notification arrives.
 Manual handoff does not cancel the run.
 If Codex autorun or its panel is missing, check that the plugin is enabled, restart the session, and review/trust its hooks in `/hooks`.
 Hook trust applies to the current definition and content: after an update, open `/hooks` in Codex CLI, review and re-trust the model-ladder SessionStart hook if marked modified, then start a new session. Codex skips untrusted or modified hooks; manually running the script does not establish trust. See [OpenAI's hook documentation](https://learn.chatgpt.com/docs/hooks).
@@ -173,7 +174,6 @@ A force-killed run may lack a checkpoint or `result.json`; inspect its draft and
 Duration forecasts are stored in live/result/history JSON; the panel time column shows elapsed/expected.
 A worker, test-writer or verifier row shows its own elapsed time over its own expected duration (router, diagnose and final-diagnosis rows show elapsed time only): the median phase duration from `forecast.phases` of comparable successful runs (VERIFIED, completed, uncensored, within 90 days, same runtime), keyed by phase plus model/effort once at least two runs have it and by phase alone before that. With no samples for a phase, the router's `workerMinutes` and `verifyMinutes` (positive integer wall-clock minutes for one worker attempt and one verification, carried in the plan and written into the run lock's `phaseExpected` after routing; Codex writes them into `live.expected`) stand in for it; history samples keep priority. Without either the row shows elapsed time only.
 Claude Code reads the table live from the run lock's `phaseExpected` (written at each workflow boundary) and the Codex panel reads `expected` in `live.json`; a finished row keeps the value it ended with. Once a running row has been running at least as long as its expected duration, the shown expected duration is recalibrated in steps: the expected value plus the smallest whole number of steps of max(1 minute, half the expected value) that lands above the elapsed time (7m expected shows 14m at 12m elapsed and 17.5m at 14m, so the denominator changes only at step boundaries). A finished row keeps its original expected duration, so an overrun stays visible as `✓ 12m/7m`.
-The Claude Code band also shows one `background` row per in-flight background task of this session (a Bash call with `run_in_background`, or an async Workflow launch other than the ladder's own) that the main session started, not a subagent: elapsed time only, with the task `<kind>: <label>` (`shell` or `workflow`). The rows show only while Claude is not running a turn and no ladder agent runs, and each leaves when its task-notification arrives.
 
 Forecast ranges cover routing, implementation and self-checks, test commands, independent
 verification and retry risk. Router ranges are uncalibrated judgments until

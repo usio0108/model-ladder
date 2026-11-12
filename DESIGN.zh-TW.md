@@ -110,7 +110,7 @@ Hook 屬提前防護，Node 不可用時放行，最終 diff 檢查仍執行保�
 | DIRECT | 小任務且實測 context 達 `direct_threshold`，路由決定本身不等於通過驗證。 |
 | Claude DIRECT | 主 session 修改後交獨立 verifier，最多三輪修正。 |
 | Codex DIRECT | 呼叫端修改隔離草稿，`directRun` 再認領範圍、核對基線、驗證及套用。 |
-| 預估 | 耗時範圍、階段實際計時與各用量時間窗的餘額評估；面板顯示經過/預估；時間窗不足或有風險時在 worker 前確認一次；不要求拆分確認。 |
+| 預估 | 耗時範圍、階段實際計時與各用量時間窗的餘額評估；面板顯示經過/預估；時間窗不足或有風險時在 worker 前確認一次。 |
 | 強制 ladder | `forceLadder` 停用 DIRECT。 |
 | 逾時 | `timeoutMs` 限制沒有輸出的閒置時間。 |
 | Codex 續跑 | 核對 checkout、任務、驗收與設定，再以新 worktree 延續草稿。 |
