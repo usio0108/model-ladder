@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+## [1.2.7] - 2026-11-12
+
+- router 不再把 commit、push、tag、release 或「工作區乾淨」寫進驗收條件，因為 worker 在隔離 worktree 中工作、不得 commit，根本無法達成，任務因此永遠過不了。若 router 仍寫出這類條件，`dropUnachievableAcceptance` 也會濾掉。Claude 與 Codex 都適用。Codex router 在你沒給條件時，現在可以自行提出驗收條件。
+- Claude 的確認步驟現在會在選項預覽中逐條列出驗收條件，並使用你的語言，讓你在核准前就看到這次 run 會依什麼判定。Codex 也同樣要求用你的語言逐條列出。
+- Codex runner 的 `--help` 現在列出完整的 `.model-ladder` 檔案，讓你知道它會在你的 repo 寫入什麼。
+- 文件：README 新增「需求與相容性」、「副作用與資料」、「解除安裝」、「Beta 與已知限制」；USAGE 新增首次執行問題的疑難排解表；移除過時的 split 說明；zh-TW 文件同步更新。
+- 新增 issue 與 PR 範本、CONTRIBUTING、SECURITY。`package.json` 補上 `engines` 與 `npm test` 指令，兩個 plugin manifest 補上 `homepage`、`repository`、`license` 與 `keywords`，CI 也加入 macOS。
 - 在 Codex 可以直接用說的改用量守門，例如「把 model-ladder 的 threshold 改成 80」或「關掉 usage guard」。Codex skill 會執行新的 `watch.mjs --set`：把 `--threshold` 與 `--guard` 存到你自己的 `~/.codex/model-ladder.json` 後直接結束，不開 watch，並回報目前生效的設定；若專案設定檔覆蓋了該值也會註明。
 
 ## [1.2.6] - 2026-11-11

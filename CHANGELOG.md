@@ -6,6 +6,13 @@ Versions follow semantic versioning; Claude Code updates require a new `.claude-
 
 ## [Unreleased]
 
+## [1.2.7] - 2026-11-12
+
+- The router no longer writes commit, push, tag, release or "working tree is clean" into acceptance criteria, because a worker works in an isolated worktree, must not commit, and cannot meet them, so a task could never pass. `dropUnachievableAcceptance` also filters such criteria out if the router still writes them. This applies to both Claude and Codex. The Codex router may now propose acceptance criteria when you gave none.
+- Claude's confirmation step now lists the acceptance criteria one by one in the option's preview, in your language, so you can see exactly what the run will be judged on before approving. Codex likewise asks for the criteria to be listed one by one in your language.
+- The Codex runner's `--help` now lists the full set of `.model-ladder` files, so you can see what it writes to your repository.
+- Documentation: the README gains Requirements and compatibility, Side effects and data, Uninstall, and Beta and known limitations sections; USAGE gains a troubleshooting table for first-run problems; the outdated split description is removed; the zh-TW docs are kept in sync.
+- The repository gains issue and PR templates, CONTRIBUTING and SECURITY. `package.json` gains `engines` and an `npm test` script, both plugin manifests gain `homepage`, `repository`, `license` and `keywords`, and CI now also runs on macOS.
 - In Codex you can change the usage guard by asking, for example "set the model-ladder threshold to 80" or "turn the usage guard off". The Codex skill runs the new `watch.mjs --set`, which saves `--threshold` and `--guard` to your own `~/.codex/model-ladder.json` and exits instead of opening the watcher, and reports the guard in effect, including a note when the project file overrides it.
 
 ## [1.2.6] - 2026-11-11
