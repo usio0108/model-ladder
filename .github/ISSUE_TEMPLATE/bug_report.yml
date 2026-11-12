@@ -1,0 +1,95 @@
+name: Bug report
+description: Something in model-ladder does not work as documented. 回報問題（中文也可以）。
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read [USAGE.md#troubleshooting](https://github.com/usio0108/model-ladder/blob/main/USAGE.md#troubleshooting) first. 請先看疑難排解。
+        Reports in English or Traditional Chinese (中文) are both welcome.
+        **Mask sensitive information** (API keys, tokens, private paths, private code, task text) before pasting logs. 貼上前請遮蔽敏感資訊。
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: Windows 11 / macOS 15 / Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: host-version
+    attributes:
+      label: Claude Code or Codex version
+      description: Which host you use and its version (`claude --version` or `codex --version`).
+      placeholder: Claude Code 2.1.290 / Codex CLI 0.160.1
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: model-ladder plugin version
+      description: The `version` in the plugin's `plugin.json`, or as shown in the report.
+      placeholder: 1.2.6
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      description: Output of `node --version`.
+      placeholder: v22.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - Claude Code marketplace (/plugin install)
+        - claude plugin install (CLI)
+        - Codex plugin (codex plugin add)
+        - Cloned from source
+        - Other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: dropdown
+    id: hooks-trusted
+    attributes:
+      label: Are the plugin hooks trusted?
+      description: In Codex, check `/hooks`; untrusted or modified hooks are skipped. For Claude Code, choose "Not applicable".
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+        - Not applicable (Claude Code)
+    validations:
+      required: true
+  - type: textarea
+    id: history
+    attributes:
+      label: Relevant `.model-ladder/history.jsonl` lines or result JSON
+      description: Paste only the relevant lines, with sensitive information masked.
+      render: json
+    validations:
+      required: true

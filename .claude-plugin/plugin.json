@@ -5,6 +5,10 @@
   "author": {
     "name": "usio0108"
   },
+  "homepage": "https://github.com/usio0108/model-ladder",
+  "repository": "https://github.com/usio0108/model-ladder",
+  "license": "MIT",
+  "keywords": ["model-routing", "verification", "escalation", "workflow", "codex"],
   "hooks": [
     "./hooks/band.json"
   ],

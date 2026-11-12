@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting (check this first)
+    url: https://github.com/usio0108/model-ladder/blob/main/USAGE.md#troubleshooting
+    about: Known first-run problems and fixes. 疑難排解請先看這裡 (USAGE.zh-TW.md 有中文版)。
+  - name: Report a security vulnerability privately
+    url: https://github.com/usio0108/model-ladder/security/advisories/new
+    about: Do not open a public issue for vulnerabilities. See SECURITY.md.

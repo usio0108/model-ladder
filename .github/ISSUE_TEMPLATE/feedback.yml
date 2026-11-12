@@ -1,0 +1,51 @@
+name: Trial feedback
+description: Share how a trial run went. 試用心得與評測結果（中文也可以）。
+labels: [feedback]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying model-ladder. If something broke, check [USAGE.md#troubleshooting](https://github.com/usio0108/model-ladder/blob/main/USAGE.md#troubleshooting) and use the bug report form instead.
+        English or Traditional Chinese (中文) are both fine. Mask sensitive information.
+  - type: input
+    id: task-type
+    attributes:
+      label: Task type
+      placeholder: bug fix, refactor, add tests, docs, ...
+    validations:
+      required: true
+  - type: input
+    id: start
+    attributes:
+      label: Starting model and effort
+      placeholder: haiku / low
+    validations:
+      required: true
+  - type: input
+    id: final
+    attributes:
+      label: Final model and effort
+      description: The tier that produced the delivered result.
+      placeholder: sonnet / medium
+    validations:
+      required: true
+  - type: dropdown
+    id: verified
+    attributes:
+      label: Was the result VERIFIED?
+      options:
+        - "Yes, VERIFIED"
+        - "No, a different report status (say which below)"
+    validations:
+      required: true
+  - type: textarea
+    id: time-usage
+    attributes:
+      label: Time taken and usage impressions
+      description: How long it took, and how it felt against your Claude or Codex quota compared with doing the task directly.
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else

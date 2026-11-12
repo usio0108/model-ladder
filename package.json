@@ -1,6 +1,17 @@
 {
   "name": "model-ladder",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usio0108/model-ladder.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test tests/unit/*.test.mjs"
+  },
   "dependencies": {
     "node-pty": "1.1.0"
   }
