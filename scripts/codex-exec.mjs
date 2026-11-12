@@ -90,13 +90,13 @@ export function processRun(command, args, { cwd, input = '', timeoutMs = 600000,
 
 // env reaches this one Codex child and, through shell_environment_policy.set, every command it runs in its sandbox,
 // whatever the person's inherit policy. It never changes the runner's own environment.
-export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs, signal, executable, onActivity, schema = SCHEMAS[phase], env = {} }) {
+export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs, signal, executable, onActivity, schema = SCHEMAS[phase], env = {}, network = false }) {
   const schemaPath = join(run, `${phase}.schema.json`)
   const outputPath = join(run, `${phase}.output.json`)
   writeFileSync(schemaPath, JSON.stringify(schema))
   rmSync(outputPath, { force: true })
   const shellEnv = Object.entries(env).flatMap(([key, value]) => ['-c', `shell_environment_policy.set.${key}=${JSON.stringify(value)}`])
-  const args = [...(executable?.prefixArgs ?? []), 'exec', '-m', cell.model, '-c', `model_reasoning_effort=${JSON.stringify(cell.effort)}`, ...shellEnv,
+  const args = [...(executable?.prefixArgs ?? []), 'exec', '-m', cell.model, '-c', `model_reasoning_effort=${JSON.stringify(cell.effort)}`, ...shellEnv, ...(network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
     '-C', cwd, '--json', '--output-schema', schemaPath, '-o', outputPath, '--sandbox', sandbox, '-']
   let result, events = [], pending = ''
   try {

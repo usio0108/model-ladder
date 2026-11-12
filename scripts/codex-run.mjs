@@ -29,7 +29,7 @@ export const DEFAULTS = {
     { model: 'terra', efforts: ['low', 'medium', 'high'], maxEffortJump: 2 },
     { model: 'sol', efforts: ['low', 'medium', 'high', 'xhigh'], maxEffortJump: 1 },
   ],
-  maxAttempts: 4, verify: null, protected: [], keepFailed: false, timeoutMs: 600000,
+  maxAttempts: 4, verify: null, protected: [], keepFailed: false, network: false, timeoutMs: 600000,
   usageGuard: GUARD_DEFAULT,
   direct_threshold: 30, commit: false, autoRun: true, band: true, hudTakeover: true, worker_skills: '', verifier_skills: '',
 }
@@ -72,7 +72,7 @@ export function loadConfig(root) {
   if (!Array.isArray(config.protected) || config.protected.some((p) => typeof p !== 'string')) throw new Error('protected must be a list of globs')
   if (config.verify !== null && (typeof config.verify !== 'string' || !config.verify.trim())) throw new Error('verify must be a command or null')
   if (typeof config.keepFailed !== 'boolean') throw new Error('keepFailed must be boolean')
-  for (const key of ['autoRun', 'band', 'hudTakeover', 'commit']) if (typeof config[key] !== 'boolean') throw new Error(`${key} must be boolean`)
+  for (const key of ['network', 'autoRun', 'band', 'hudTakeover', 'commit']) if (typeof config[key] !== 'boolean') throw new Error(`${key} must be boolean`)
   const dt = config.direct_threshold
   if (dt !== 'off' && !(typeof dt === 'number' && dt >= 1 && dt <= 100)) throw new Error('direct_threshold must be a number between 1 and 100, or "off"')
   for (const key of ['worker_skills', 'verifier_skills']) if (typeof config[key] !== 'string') throw new Error(`${key} must be a string of skill instructions`)
@@ -104,11 +104,16 @@ export const mainVenv = (root) => resolve(root, process.env.UV_PROJECT_ENVIRONME
 // PYTHONDONTWRITEBYTECODE keeps Python from writing __pycache__ into it. The cache lives in the worktree, ignored
 // by its own .gitignore, so it is never part of the attempt's diff and goes away with the worktree.
 export function sandboxEnv(root, cwd) {
-  if (!uvProject(root)) return {}
+  // The Codex sandbox cannot write the system temp dir, so every project gets a temp dir inside the worktree.
+  const tmp = join(cwd, '.ml-tmp')
+  mkdirSync(tmp, { recursive: true })
+  writeFileSync(join(tmp, '.gitignore'), '*\n')
+  const temp = { TEMP: tmp, TMP: tmp, TMPDIR: tmp }
+  if (!uvProject(root)) return temp
   const cache = join(cwd, '.uv-cache')
   mkdirSync(cache, { recursive: true })
   writeFileSync(join(cache, '.gitignore'), '*\n')
-  return { UV_PROJECT_ENVIRONMENT: mainVenv(root), UV_NO_SYNC: '1', UV_OFFLINE: '1', UV_PYTHON_DOWNLOADS: 'never', UV_CACHE_DIR: cache, PYTHONDONTWRITEBYTECODE: '1' }
+  return { ...temp, UV_PROJECT_ENVIRONMENT: mainVenv(root), UV_NO_SYNC: '1', UV_OFFLINE: '1', UV_PYTHON_DOWNLOADS: 'never', UV_CACHE_DIR: cache, PYTHONDONTWRITEBYTECODE: '1' }
 }
 // A uv verification cannot run in the sandbox until the main checkout has a synced environment to borrow.
 export function uvSyncRequired(root, verifyText) {
@@ -122,8 +127,10 @@ export function nodeModulesMissing(cwd) {
   } catch { return false }
 }
 export const UV_SYNC_MESSAGE = (root) => `Run uv sync in the main checkout first: this uv project has no environment at ${mainVenv(root)}. Codex worker and verifier sandboxes have no network and cannot create one, so the run stopped before any worker started. Run uv sync in ${root}, then rerun the same task.`
-export const SANDBOX_HINT = 'Codex sandbox limits: no network, and writes only inside the attempt worktree, which has no .venv or node_modules. To fix: for a uv project run uv sync in the main checkout first (the runner then lends its .venv read-only); for a Node project run the checks outside the sandbox or set verify in .codex/model-ladder.json to a command that needs no install or network.'
-const sandboxLimits = (uv) => `\nSANDBOX LIMITS: this Codex sandbox has no network and may write only inside this worktree, which has no .venv or node_modules of its own. Do not run uv sync, pip install, npm install or any other download, and do not create .venv or node_modules here.${uv ? " This is a uv project: the runner points UV_PROJECT_ENVIRONMENT at the main checkout's .venv (use it read-only) with UV_NO_SYNC, UV_OFFLINE and a UV_CACHE_DIR inside this worktree, so run uv run pytest or the VERIFY command as is. If a Python dependency is still missing, report that the person must run uv sync in the main checkout first." : ''} A check you could not run (for example frontend checks without node_modules) is reported as not run, never as passed; name the command and what it needs.`
+export const sandboxHint = (network = false) => `Codex sandbox limits: ${network ? '' : 'no network, and '}writes only inside the attempt worktree, which has no .venv or node_modules. Worker and verifier run as different Windows sandbox accounts, so a PermissionError on gitignored files or directories created by an earlier role (pytest cache or tmp dirs) is a sandbox identity issue, not a missing dependency: uv sync does not fix it. To fix: for a uv project run uv sync in the main checkout first (the runner then lends its .venv read-only); for a Node project run the checks outside the sandbox or set verify in .codex/model-ladder.json to a command that needs no install${network ? '' : ' or network'}.`
+export const SANDBOX_HINT = sandboxHint(false)
+const PYTHON_NETWORK_LINE = '\nNETWORK: fetch data with Python (urllib or requests), not curl: curl in the Windows Codex sandbox fails with schannel SEC_E_NO_CREDENTIALS.'
+const sandboxLimits = (uv, network = false) => `\nSANDBOX LIMITS: this Codex sandbox ${network ? 'may write' : 'has no network and may write'} only inside this worktree, which has no .venv or node_modules of its own. ${network ? 'Do not run uv sync, pip install or npm install, and do not create .venv or node_modules here.' : 'Do not run uv sync, pip install, npm install or any other download, and do not create .venv or node_modules here.'}${uv ? " This is a uv project: the runner points UV_PROJECT_ENVIRONMENT at the main checkout's .venv (use it read-only) with UV_NO_SYNC, UV_OFFLINE and a UV_CACHE_DIR inside this worktree, so run uv run pytest or the VERIFY command as is. If a Python dependency is still missing, report that the person must run uv sync in the main checkout first." : ''} A check you could not run (for example frontend checks without node_modules) is reported as not run, never as passed; name the command and what it needs.`
 function verifyProtection(verify, skill) {
   if (skill) return [skill.slice(0, skill.lastIndexOf('/')) + '/**']
   const command = verify ?? ''
@@ -316,10 +323,10 @@ export async function runLadder(input, options = {}) {
       if (phase === 'route') prompt += '\nReturn workerMinutes and verifyMinutes as positive integer wall-clock minutes for ONE worker attempt (implementation and self-checks) and ONE independent verification.'
       if (phase === 'worker' && route.allowTests) prompt += '\nTEST-WRITER ROLE: the user requested test changes. Tests must check real behavior; never weaken existing tests. Change code under test only if the task requests it. Explicit protected paths and verification inputs remain forbidden.'
       const inWorktree = phase === 'worker' || phase === 'verify'
-      if (inWorktree) prompt += sandboxLimits(uv)
+      if (inWorktree) prompt += sandboxLimits(uv, config.network) + (config.network ? PYTHON_NETWORK_LINE : '')
       checkUsage()
       return role(phase, cell, input.task, async (agent) => {
-        const response = await codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs: config.timeoutMs, signal: controller.signal, executable: options.executable, env: inWorktree ? sandboxEnv(root, cwd) : {},
+        const response = await codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs: config.timeoutMs, signal: controller.signal, executable: options.executable, env: inWorktree ? sandboxEnv(root, cwd) : {}, network: inWorktree && config.network,
           onActivity: (activity) => { agent.activity = activity; publish() }, ...(phase === 'route' && (directContext || !acceptance.length) && { schema: SCHEMAS[routeSchemaName(directContext, !acceptance.length)] }), ...(reportSkills && { schema: SCHEMAS.workerWithSkills }) })
         usage.push({ phase, cell: label(cell), turns: response.usage })
         return response.value
@@ -389,7 +396,7 @@ Also return estimatedMinutes (most likely), optimisticMinutes and pessimisticMin
       attempts.push(attempt)
       let worker, verdict, tree
       try {
-        worker = input.directRun && number === 1 ? { status: 'done', summary: input.directSummary, blockedReason: null } : await ask('worker', cell, cwd, `Implement exactly one model-ladder attempt.\nTASK\n${input.task}\nGOAL\n${route.goal}\nSCOPE\n${JSON.stringify(route.scope)}\nACCEPTANCE\n${JSON.stringify(planAcceptance)}\nVERIFY\n${verify ?? 'Independent verifier follows project verify skill or user acceptance'}\nHINT FROM FAILED ATTEMPTS\n${hint}\nPREVIOUS RESULTS\n${JSON.stringify(attempts.slice(0, -1).map(({ cell, reason }) => ({ cell, reason })))}\nWork only in this worktree. The user's existing uncommitted changes are already present; preserve them. Do not commit, change branches, reset, or edit git metadata. ${route.readOnly ? 'READ ONLY. Make no file changes. Your summary must contain the full report.' : `Do not modify protected paths matching ${JSON.stringify(protection)}. Tests define expected behavior. Return a concise summary and status done, or blocked with blockedReason.`} Include concise model handoff context in summary: progress, decisions, user constraints supplied here, cautions, failed approaches, and next steps. Separate what you verified from claims or unfinished work; do not infer parent conversation context.`, route.readOnly ? 'read-only' : 'workspace-write')
+        worker = input.directRun && number === 1 ? { status: 'done', summary: input.directSummary, blockedReason: null } : await ask('worker', cell, cwd, `Implement exactly one model-ladder attempt.\nTASK\n${input.task}\nGOAL\n${route.goal}\nSCOPE\n${JSON.stringify(route.scope)}\nACCEPTANCE\n${JSON.stringify(planAcceptance)}\nVERIFY\n${verify ?? 'Independent verifier follows project verify skill or user acceptance'}\nHINT FROM FAILED ATTEMPTS\n${hint}\nPREVIOUS RESULTS\n${JSON.stringify(attempts.slice(0, -1).map(({ cell, reason }) => ({ cell, reason })))}\nWork only in this worktree. The user's existing uncommitted changes are already present; preserve them. Do not commit, change branches, reset, or edit git metadata. ${route.readOnly ? 'READ ONLY. Make no file changes. Your summary must contain the full report.' : `Do not modify protected paths matching ${JSON.stringify(protection)}. Tests define expected behavior. Return a concise summary and status done, or blocked with blockedReason.`} Include concise model handoff context in summary: progress, decisions, user constraints supplied here, cautions, failed approaches, and next steps. Separate what you verified from claims or unfinished work; do not infer parent conversation context.`, route.readOnly && !config.network ? 'read-only' : 'workspace-write')
         if (worker.skills) attempt.skills = worker.skills
         if (git(cwd, 'rev-parse', 'HEAD') !== baseCommit) throw new Error('Worker changed the base commit')
         tree = snapshot(cwd, run, `worker-${number}`)
@@ -401,23 +408,27 @@ Also return estimatedMinutes (most likely), optimisticMinutes and pessimisticMin
         else if (worker.skills?.some((s) => s.applies && s.available && !s.used)) verdict = { pass: false, reason: `worker skipped required skills: ${worker.skills.filter((s) => s.applies && s.available && !s.used).map((s) => `${s.name} (${s.note})`).join('; ')}`, output: '' }
         else if (!route.readOnly && verify && !files.length) verdict = { pass: false, reason: 'Worker changed nothing', output: '' }
         else {
+          // The verify command and verifier run in a fresh worktree built from the snapshot, never in the worker's: on Windows
+          // they are different sandbox accounts, and ignored files the worker created (pytest caches, temp dirs) are unreadable to them.
+          const vcwd = makeWorktree(root, run, `${number}-verify`, baseCommit, tree)
+          owned.push(vcwd)
           if (verify && !route.readOnly) {
             checkUsage()
             verdict = await role('verify-command', { model: 'node', effort: '—' }, verify, async () => {
-              const check = await processRun(verify, [], { cwd, shell: true, timeoutMs: config.timeoutMs, signal: controller.signal, env: sandboxEnv(root, cwd) })
+              const check = await processRun(verify, [], { cwd: vcwd, shell: true, timeoutMs: config.timeoutMs, signal: controller.signal, env: sandboxEnv(root, vcwd) })
               // Without node_modules a failing Node check never ran the project's checks: not a pass, and not a code
               // failure a stronger model could fix. No node_modules junction is made, so cleanup never follows one.
-              if (check.code !== 0 && /\b(?:npm|npx|pnpm|yarn|bun)\b/i.test(verify) && nodeModulesMissing(cwd)) throw new EnvironmentError(`Frontend checks not run: node_modules is missing in the attempt worktree, so ${verify} exited ${check.code} without running the project's checks. This is not a pass. ${SANDBOX_HINT}`)
+              if (check.code !== 0 && /\b(?:npm|npx|pnpm|yarn|bun)\b/i.test(verify) && nodeModulesMissing(vcwd)) throw new EnvironmentError(`Frontend checks not run: node_modules is missing in the attempt worktree, so ${verify} exited ${check.code} without running the project's checks. This is not a pass. ${sandboxHint(config.network)}`)
               return { pass: check.code === 0, reason: check.code === 0 ? 'Verification command passed' : `Verification exited ${check.code}`, output: (check.stdout + check.stderr).slice(-12000) }
             })
           }
           if (!verdict || verdict.pass) {
-            verdict = await ask('verify', config.verifier, cwd, `Independently verify every user acceptance criterion against repository contents and actual diff. ${verifySkill ? `Follow the existing project verification skill at ${verifySkill} and run its checks. Resolve paths referenced by that skill relative to the directory containing its SKILL.md.` : ''} Do not edit source, tests or verification inputs. Build artifacts from verification checks are allowed. Do not trust the worker summary. If the task changes tests, check that they assert real behavior and do not weaken existing tests, and that code under test changed only when requested.\nTASK\n${input.task}\nACCEPTANCE\n${JSON.stringify(planAcceptance.length ? planAcceptance : [input.task])}\nBASE TREE (Git tree object, not a commit or HEAD)\n${baseTree}\nWORKER REPORT\n${worker.summary}\n${route.readOnly ? 'This is a report task; inspect cited sources and judge the report.' : `The base tree snapshots the original checkout, including pre-existing dirty changes. Compare the attempt against that tree with git diff ${baseTree} --; do not use HEAD as the baseline or count pre-existing changes as attempt changes. Check git status --short and inspect untracked files too, since git diff omits them.`}`, route.readOnly ? 'read-only' : 'workspace-write')
+            verdict = await ask('verify', config.verifier, vcwd, `Independently verify every user acceptance criterion against repository contents and actual diff. ${verifySkill ? `Follow the existing project verification skill at ${verifySkill} and run its checks. Resolve paths referenced by that skill relative to the directory containing its SKILL.md.` : ''} Do not edit source, tests or verification inputs. Build artifacts from verification checks are allowed. Do not trust the worker summary. If the task changes tests, check that they assert real behavior and do not weaken existing tests, and that code under test changed only when requested.\nTASK\n${input.task}\nACCEPTANCE\n${JSON.stringify(planAcceptance.length ? planAcceptance : [input.task])}\nBASE TREE (Git tree object, not a commit or HEAD)\n${baseTree}\nWORKER REPORT\n${worker.summary}\n${route.readOnly ? `This is a report task; inspect cited sources and judge the report.${config.network ? ' Make no file changes.' : ''}` : `The base tree snapshots the original checkout, including pre-existing dirty changes. Compare the attempt against that tree with git diff ${baseTree} --; do not use HEAD as the baseline or count pre-existing changes as attempt changes. Check git status --short and inspect untracked files too, since git diff omits them.`}`, route.readOnly && !config.network ? 'read-only' : 'workspace-write')
           }
-          const after = snapshot(cwd, run, `verify-${number}`)
-          const tampered = protectedChange(cwd, baseTree, after, protection) ?? changedNpmScripts(cwd, baseTree, after, verify)
+          const after = snapshot(vcwd, run, `verify-${number}`)
+          const tampered = protectedChange(vcwd, baseTree, after, protection) ?? changedNpmScripts(vcwd, baseTree, after, verify)
           if (tampered) verdict = { pass: false, reason: `Modified protected file ${tampered} during verification`, output: '' }
-          if (git(cwd, 'rev-parse', 'HEAD') !== baseCommit || changed(cwd, tree, after, baseTree).length) verdict = { pass: false, reason: 'Verification changed repository files', output: verdict?.output ?? '' }
+          if (git(vcwd, 'rev-parse', 'HEAD') !== baseCommit || changed(vcwd, tree, after, baseTree).length) verdict = { pass: false, reason: 'Verification changed repository files', output: verdict?.output ?? '' }
         }
       } catch (caught) {
         const error = usageStop ?? caught
@@ -446,7 +457,7 @@ Also return estimatedMinutes (most likely), optimisticMinutes and pessimisticMin
       if (number === config.maxAttempts || !moves.length) break
       let diagnosis
       try {
-        diagnosis = await ask('diagnose', config.router, cwd, `Diagnose this failed model-ladder attempt. Read only.\nTASK\n${input.task}\nCELL\n${label(cell)}\nFAILURE\n${JSON.stringify(verdict)}\nWORKER\n${JSON.stringify(worker)}\nLEGAL NEXT CELLS\n${JSON.stringify(moves)}\nRaise effort or model when stronger reasoning can help. stop_environment for missing dependencies, required skills/plugins/MCP tools, invalid credentials, unavailable services or permissions. stop_unclear for ambiguous goals. For raise actions choose a legal cell. For stop actions use null model and effort. Give the next worker a short hint. Each retry starts from the original snapshot. Workers and verifiers run in a Codex sandbox with no network that may write only inside the worktree, which has no .venv or node_modules; a failure from those limits (uv cache access denied, failed downloads, missing packages) is stop_environment, and its hint says what the person can do: run uv sync in the main checkout first, or set verify in .codex/model-ladder.json to a command that needs no install or network.`)
+        diagnosis = await ask('diagnose', config.router, cwd, `Diagnose this failed model-ladder attempt. Read only.\nTASK\n${input.task}\nCELL\n${label(cell)}\nFAILURE\n${JSON.stringify(verdict)}\nWORKER\n${JSON.stringify(worker)}\nLEGAL NEXT CELLS\n${JSON.stringify(moves)}\nRaise effort or model when stronger reasoning can help. stop_environment for missing dependencies, required skills/plugins/MCP tools, invalid credentials, ${config.network ? 'unavailable services that are not plain network failures,' : 'unavailable services'} or permissions. stop_unclear for ambiguous goals. For raise actions choose a legal cell. For stop actions use null model and effort. Give the next worker a short hint. Each retry starts from the original snapshot. ${config.network ? 'Workers and verifiers run in a Codex sandbox with network access that may write only inside the worktree, which has no .venv or node_modules; a failure from those limits (uv cache access denied, missing packages) is stop_environment, and its hint says what the person can do: run uv sync in the main checkout first, or set verify in .codex/model-ladder.json to a command that needs no install. Plain network failures (timeouts, DNS, connection errors) are not stop_environment: give the next worker a hint to retry or to fetch with Python instead.' : 'Workers and verifiers run in a Codex sandbox with no network that may write only inside the worktree, which has no .venv or node_modules; a failure from those limits (uv cache access denied, failed downloads, missing packages) is stop_environment, and its hint says what the person can do: run uv sync in the main checkout first, or set verify in .codex/model-ladder.json to a command that needs no install or network.'} Worker and verifier run as different Windows sandbox accounts, so a PermissionError on gitignored files or directories created by an earlier role (pytest cache or tmp dirs, .uv-cache) is a sandbox identity issue, not a missing dependency: uv sync does not fix it.`)
       } catch (caught) {
         const error = usageStop ?? caught
         if (stops(error)) { retain(cwd, number); throw error }
@@ -456,7 +467,7 @@ Also return estimatedMinutes (most likely), optimisticMinutes and pessimisticMin
       if (diagnosis.action.startsWith('stop_')) {
         if (diagnosis.action === 'stop_environment') retain(cwd, number)
         result.status = 'STOPPED'
-        result.message = `${diagnosis.reason}\n${diagnosis.hint}${diagnosis.action === 'stop_environment' ? `\n${SANDBOX_HINT}` : ''}`
+        result.message = `${diagnosis.reason}\n${diagnosis.hint}${diagnosis.action === 'stop_environment' ? `\n${sandboxHint(config.network)}` : ''}`
         return result
       }
       cell = pickMove(diagnosis, cell, config.tiers)

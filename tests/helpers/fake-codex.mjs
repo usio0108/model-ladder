@@ -37,7 +37,7 @@ if (scenario.commands?.[phase]) {
   const ran = spawnSync(process.execPath, [scenario.commands[phase]], { cwd, env: { ...env, ...shellEnv }, encoding: 'utf8' })
   command = { code: ran.status, output: (ran.stdout ?? '') + (ran.stderr ?? '') }
 }
-appendFileSync(log, JSON.stringify({phase,cwd,model:arg('-m'),effort:arg('-c'),sandbox:arg('--sandbox'),prompt,shellEnv,childEnv,command}) + '\n')
+appendFileSync(log, JSON.stringify({phase,cwd,model:arg('-m'),effort:arg('-c'),sandbox:arg('--sandbox'),networkAccess:args.includes('sandbox_workspace_write.network_access=true'),prompt,shellEnv,childEnv,command}) + '\n')
 const calls = readFileSync(log,'utf8').trim().split('\n').map(JSON.parse)
 const number = calls.filter((call) => call.phase === 'worker').length
 if (scenario.environment === phase && scenario.limitEvent) {

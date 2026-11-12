@@ -101,6 +101,7 @@ Personal files are `~/.claude/model-ladder.json` and `~/.codex/model-ladder.json
 | `protected` | `[]` | Extra paths workers cannot modify. |
 | `commit` | `false` | Commit verified changes when explicitly enabled. |
 | `keepFailed` | `false` | Retain failed worktrees. |
+| `network` | `false` | Codex only. When `true`, worker and verifier sandboxes get network access (`sandbox_workspace_write.network_access`), report tasks run in `workspace-write` (network has no effect in `read-only`) while edits stay forbidden and detected, and prompts tell roles to fetch with Python rather than curl. |
 | `timeoutMs` | `600000` | Codex idle timeout per role or verify command. |
 | `usageGuard` | Enabled, `90%` | Usage protection, preferably stored in the personal file. |
 | `worker_skills` / `verifier_skills` | Empty | Natural-language role instructions. Named capabilities that apply are mandatory: the worker must actually invoke them, not just follow them in spirit. |
@@ -117,6 +118,7 @@ Codex workers and verifiers run in a sandbox with no network that may write only
 
 | Project | What the runner does |
 |---|---|
+| Any project, Codex worker, verify command and verifier | `TEMP`, `TMP` and `TMPDIR` point at `<worktree>/.ml-tmp`, because the Codex sandbox cannot write the system temp dir (`tempfile.gettempdir()` fails, pytest `tmp_path` breaks). The folder holds its own `.gitignore` with `*`, so it is never part of the patch. The runner's own environment is unchanged. |
 | uv project (`uv.lock`) whose main checkout has `.venv` | The worker, the verify command and the verifier get `UV_PROJECT_ENVIRONMENT` set to the main checkout's `.venv` (or to your own `UV_PROJECT_ENVIRONMENT`), `UV_NO_SYNC=1`, `UV_OFFLINE=1`, `UV_PYTHON_DOWNLOADS=never`, `PYTHONDONTWRITEBYTECODE=1` and `UV_CACHE_DIR=<worktree>/.uv-cache`. Codex roles receive them through `shell_environment_policy.set`. `uv run pytest` then runs offline against the main `.venv` without syncing or writing to it, and no `.venv` is created in the worktree. The cache holds its own `.gitignore`, so it is never part of the patch, and it is removed with the worktree. |
 | uv project whose verify command or verify skill uses `uv`, and the main checkout has no `.venv` | The run stops before any role with `STOPPED`, `errorCode: "UV_SYNC_REQUIRED"` and "Run uv sync in the main checkout first". It does not retry. Run `uv sync` in the main checkout, then rerun the task. |
 | Node project with dependencies, verify uses npm, npx, pnpm, yarn or bun, the worktree has no `node_modules`, and the command fails | The run stops with `STOPPED` and "Frontend checks not run". This is never reported as a pass, and no stronger model is tried. The runner makes no `node_modules` junction, so worktree cleanup never follows a link into the main checkout. Run the checks yourself, or set `verify` to a check that needs no install. |

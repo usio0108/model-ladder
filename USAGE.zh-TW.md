@@ -102,6 +102,7 @@ DIRECT 不代表完成，必須遵守回傳的保護規則，獨立驗證後才�
 | `protected` | `[]` | Worker 不得修改的額外路徑。 |
 | `commit` | `false` | 明確開啟後提交已驗證變更。 |
 | `keepFailed` | `false` | 保留失敗 worktree。 |
+| `network` | `false` | 僅 Codex。設為 `true` 時，worker 與 verifier 的 sandbox 可連網（`sandbox_workspace_write.network_access`），報告型任務改用 `workspace-write`（`read-only` 下網路無效），但仍禁止並偵測檔案變更，提示也會要求以 Python 而非 curl 取資料。 |
 | `timeoutMs` | `600000` | Codex 每個角色或驗證命令的閒置逾時。 |
 | `usageGuard` | 開啟、`90%` | 使用量保護，建議存於個人檔。 |
 | `worker_skills` / `verifier_skills` | 空白 | 自然語言角色指示。適用的指名能力為必用：worker 必須實際呼叫，不能只是照著做。 |
@@ -118,6 +119,7 @@ Codex 的 worker 與 verifier 在沒有網路、只能寫入該次嘗試 worktre
 
 | 專案 | runner 的做法 |
 |---|---|
+| 任何專案，Codex 的 worker、verify 指令與 verifier | `TEMP`、`TMP`、`TMPDIR` 指向 `<worktree>/.ml-tmp`，因為 Codex sandbox 無法寫入系統暫存目錄（`tempfile.gettempdir()` 失敗、pytest `tmp_path` 壞掉）。該資料夾有自己的 `.gitignore`（內容 `*`），不會進入 patch。runner 自己的環境不變。 |
 | uv 專案（有 `uv.lock`），主 checkout 已有 `.venv` | worker、verify 指令與 verifier 會拿到：`UV_PROJECT_ENVIRONMENT` 指向主 checkout 的 `.venv`（或你自己設定的 `UV_PROJECT_ENVIRONMENT`）、`UV_NO_SYNC=1`、`UV_OFFLINE=1`、`UV_PYTHON_DOWNLOADS=never`、`PYTHONDONTWRITEBYTECODE=1`，以及 `UV_CACHE_DIR=<worktree>/.uv-cache`。Codex 角色透過 `shell_environment_policy.set` 取得這些值。`uv run pytest` 因此能離線使用主 `.venv`，不同步也不寫入它，worktree 裡不會產生 `.venv`。快取目錄有自己的 `.gitignore`，不會進入 patch，並隨 worktree 一起刪除。 |
 | uv 專案，verify 指令或驗證 skill 用到 `uv`，但主 checkout 沒有 `.venv` | run 在任何角色開始前停止，回報 `STOPPED`、`errorCode: "UV_SYNC_REQUIRED"` 與「Run uv sync in the main checkout first」（需要先在主 checkout 跑 uv sync），不會重試。請在主 checkout 執行 `uv sync` 後重跑任務。 |
 | 有相依套件的 Node 專案，verify 使用 npm、npx、pnpm、yarn 或 bun，worktree 沒有 `node_modules` 且指令失敗 | run 以 `STOPPED` 停止並回報「Frontend checks not run」（前端檢查未執行），絕不當作通過，也不會改用更強的模型重試。runner 不建立 `node_modules` junction，所以清除 worktree 時不會順著連結刪到主 checkout。請自行執行檢查，或把 `verify` 設成不需安裝的檢查。 |

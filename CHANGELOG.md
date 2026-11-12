@@ -4,6 +4,12 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [1.2.9] - 2026-11-12
+
+- New opt-in `"network": true` in `.codex/model-ladder.json` (default `false`) enables network access in the Codex workspace-write sandbox for workers and verifiers. Report tasks then run in `workspace-write` because network has no effect in `read-only`; the read-only edit guard and prompt stay. Prompts drop the "no network" wording, diagnosis no longer treats plain network failures as `stop_environment`, and roles are told to fetch with Python (urllib/requests) instead of curl, which fails in the Windows sandbox with schannel `SEC_E_NO_CREDENTIALS`.
+- Codex workers, verify commands and verifiers now get `TEMP`, `TMP` and `TMPDIR` pointing at a gitignored `.ml-tmp` folder inside the attempt worktree, for every project. Before, the sandbox could not write the system temp dir on Windows, so `tempfile.gettempdir()` raised "No usable temporary directory found" and pytest `tmp_path` failed. The runner's own environment is unchanged.
+- Codex now runs the verify command and the verifier in a fresh `attempt-<n>-verify` worktree built from the worker's snapshot instead of the worker's own worktree. On Windows the worker and verifier run as different sandbox accounts, so gitignored files the worker created (`.pytest_cache`, `.pytest_tmp`, `.ml-tmp`, `.uv-cache`) were unreadable to them and tmp_path tests failed with PermissionError ("147 passed, 9 errors"). The worker worktree is still the one retained on failure or conflict. The diagnose prompt and sandbox hint now say that a PermissionError on files an earlier role created is a sandbox identity issue that `uv sync` does not fix.
+
 ## [1.2.8] - 2026-11-12
 
 - Codex workers and verifiers can now run a uv project's tests in their sandbox, which has no network and whose worktree has no `.venv`. Before, `uv run pytest` failed on the uv cache (access denied) or on the network, diagnosis returned `stop_environment`, and the run stopped. The worker, the verify command and the verifier now get `UV_PROJECT_ENVIRONMENT` pointing at the main checkout's `.venv` with `UV_NO_SYNC`, `UV_OFFLINE`, `PYTHONDONTWRITEBYTECODE` and a `UV_CACHE_DIR` inside the worktree, passed to Codex through `shell_environment_policy.set`. Nothing writes to the main `.venv`, no `.venv` appears in the worktree, and no global variable changes.
@@ -77,16 +83,10 @@ Codex reaches parity with the Claude Code side for the panel, usage handoff, ski
 - `handoff now` now actually asks the main session for the AI-written handoff. It used `$.prompt.submit`, which Claude Code refuses for text that starts with `/`, so it only ever showed the fallback toast; it now uses `$.command.run`.
 - Worker skill instructions are enforced, not just suggested: with `worker_skills` set, the worker reports every capability they name (applies, available, used, note), and an attempt where one applies and is available but was not used fails before verification (`worker skipped required skills: ...`). Unavailable or not-applicable capabilities do not fail. The finish report shows a `Skills` line per attempt.
 - On the DIRECT path the main session now follows `worker_skills` itself and passes `verifier_skills` to its verifier, as the Codex runner already did.
-
-## [1.1.4] - 2026-11-03
-
 - The Claude Code band no longer shows a `background` row for the ladder's own Workflow launch (`workflow: ladder`); you already know model-ladder is choosing a model. Other async Workflow launches still get a row.
 - A background Bash call or Workflow launch made inside a subagent (for example a verifier running a test command in the background) no longer adds a background row. Its task-notification goes to the subagent, never to the main session, so the row used to stay after the task ended.
 - When Claude Code refuses a worker's isolation worktree ("git could not be run to resolve it"), a transient failure, the worker or test-writer now retries once with the same model and effort instead of the run stopping with `stop_environment`.
 - Cleanup removes worktrees with `git worktree remove --force --force`, so the worktrees Claude Code locks no longer linger with their `worktree-wf_*` branches.
-
-## [1.1.3] - 2026-11-02
-
 - Overrun estimates now use history: once an agent row passes its expected duration, the expected value becomes the median of at least 2 past runs that took longer (agentExpectations now also returns the raw samples), else the step estimate shown with a leading `~` (for example `12m/~14m`) in the Claude Code band and the Codex panel; and in the Claude Code band an overrun agent row shows its current tool activity (for example `Bash: Run unit tests`) in place of the task text, falling back to the task text when it cannot be read.
 - Codex on Windows: the SessionStart hook adds a marked `codex` function to the PowerShell profiles, so typing `codex` in a new PowerShell window opens the model-ladder HUD; subcommands, redirected IO and a missing `node-pty` or Node.js run the native `codex.exe`, `node-pty` installs in the background, and `"hudTakeover": false` removes the function. The HUD also falls back to plain Codex when `node-pty` cannot load.
 - Band usage percentages are no longer bold and use raw colors (yellow from 50% up to the usage guard threshold, red at or above it), since some surfaces drew the theme colors as plain text.
@@ -95,9 +95,6 @@ Codex reaches parity with the Claude Code side for the panel, usage handoff, ski
 - A background shell row shows an expected duration once the same command (its first line) has finished before: the median of its last ten runs, kept across sessions and recalibrated like an agent row when overrun; a first run shows elapsed only.
 - The time column header in the Claude Code band and the Codex panel reads `act./est.` (actual elapsed over expected) instead of `time`.
 - Claude Code verifier and diagnosis rows now show their expected duration too: their prompts carry no TASK line and each ladder boundary is its own workflow run, so the band now uses the only active ladder lock when it cannot match a task (two or more active runs still show elapsed only).
-
-## [1.1.2] - 2026-11-02
-
 - Workers now follow editing rules (Edit/Write or apply_patch only, `uv run` with cleanup, `git status` check before reporting); the router suggests `claude plugin test .` when band files change.
 - The Claude Code verifier now returns `workerFiles` (the worker's unstaged and untracked paths from `git status`), and with a verify command it passes only when the command succeeds and every ACCEPTANCE item is met; a passing verdict with empty `workerFiles` becomes a failure (`worker changed nothing`) so the ladder escalates.
 - A running agent row whose elapsed time has reached its expected duration now shows a recalibrated expected duration (expected plus whole steps of max(1 minute, half the expected value) until it exceeds elapsed, for example 12m/14m for a 7m expectation) in the Claude Code band and the Codex panel; a finished row keeps its original expected duration.
@@ -106,14 +103,8 @@ Codex reaches parity with the Claude Code side for the panel, usage handoff, ski
 - The router also returns `workerMinutes` and `verifyMinutes` (positive integer wall-clock minutes for one worker attempt and one verification). The plan carries them into the run lock's per-agent table as the expectation for a phase history has no sample for, so worker and verifier rows have an expected duration from the first run. History samples (phase plus model/effort, then phase) still take priority.
 - The Codex router returns `workerMinutes` and `verifyMinutes` too (positive integers, schema-checked); after routing they fill the Codex panel's per-agent table only for a worker or verify phase history has no sample for, so the first Codex run shows elapsed/expected on worker and verifier rows.
 - The band usage line shows each percentage bold and colored: plain under 50%, warning from 50% up to the usage guard threshold, error at or above it; the rest stays dim. The instructions row leaves a space after its fold arrow.
-
-## [1.1.1] - 2026-11-02
-
 - The time column of each agent row (router, worker, test-writer, verifier) in the Claude Code band and the Codex panel now shows that agent's own elapsed time over its own expected duration, not over the whole run's forecast total. The expected duration is the median of earlier comparable successful runs' phase timings, keyed by phase plus model/effort once there are two samples and by phase alone before that; with no samples only elapsed time shows.
 - A running row reads its expected duration live, so it no longer goes missing when the run has no forecast yet at spawn. The `no model` row keeps run elapsed over the run's forecast total.
-
-## [1.1.0] - 2026-10-30
-
 - Duration forecasts: structured ranges, phase timings and per-window usage headroom are recorded in live, result and history JSON and calibrated from comparable successful runs; the split prompt is removed.
 - The panel time column shows elapsed/expected (for example `5s/12m`) in the Claude Code band and the Codex panel, falling back to elapsed time when no forecast exists.
 - When the startup forecast says a usage window is insufficient or at risk, Claude Code and Codex ask once before any worker starts (`acceptUsageRisk: true` continues); the usage guard still applies.
@@ -127,17 +118,11 @@ Codex reaches parity with the Claude Code side for the panel, usage handoff, ski
 - Scope role instructions with `project: instructions`, while unprefixed lines remain global.
 - Show only applicable instruction text in the Band, with a collapsible single-line preview and no `skill instructions:` label.
 - Apply the same project selection in Claude Code, Codex, and linked worktrees.
-
-## [1.0.2] - 2026-10-30
-
 - Shortened plugin settings descriptions, including context-window information in the Band option.
 - Added the installed version to the first configuration label.
 - Simplified both language editions of the README, advanced usage, design notes, and release history.
 - Updated Band examples and moved detailed operation and configuration references to the advanced guides.
 - Removed unreliable performance comparisons and outdated test-result claims, preserving third-party license text.
-
-## [1.0.1] - 2026-10-30
-
 - Codex DIRECT uses measured caller context and an isolated draft that must pass independent verification before application.
 - Optional Codex commits preserve unrelated staged changes and skip files with pre-existing or concurrent edits.
 - Codex SessionStart respects personal/project autorun and panel settings, with test-writer rules aligned across runtimes.
@@ -146,9 +131,6 @@ Codex reaches parity with the Claude Code side for the panel, usage handoff, ski
 - Recognized limit-only responses stop as `USAGE_LIMIT`.
 - Windows process-tree termination failures retain registration and report the error without a false stopped handoff.
 - Updated both runtime skills and bilingual documentation for DIRECT, commits, splitting, and platform limits.
-
-## [1.0.0] - 2026-10-29
-
 First public release, including prior development history.
 
 - Route Claude Code and Codex tasks to suitable models, isolate attempts, verify independently, and escalate failed attempts.

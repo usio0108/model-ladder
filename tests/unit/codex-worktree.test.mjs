@@ -204,8 +204,13 @@ test('sandboxEnv lends a uv project the main .venv read-only with an ignored cac
   assert.deepEqual({ cache: process.env.UV_CACHE_DIR, project: process.env.UV_PROJECT_ENVIRONMENT, temp: process.env.TEMP }, before, 'the runner environment is unchanged')
   const plain = mkdtempSync(join(tmpdir(), 'ml-plain-'))
   t.after(() => rmSync(plain, { recursive: true, force: true }))
-  assert.deepEqual(sandboxEnv(plain, plain), {}, 'not a uv project')
+  const plainEnv = sandboxEnv(plain, plain)
+  assert.deepEqual(Object.keys(plainEnv).sort(), ['TEMP', 'TMP', 'TMPDIR'], 'not a uv project: only temp variables')
+  assert.ok(samePath(plainEnv.TEMP, join(plain, '.ml-tmp')))
+  assert.equal(readFileSync(join(plain, '.ml-tmp', '.gitignore'), 'utf8'), '*\n')
   assert.equal(existsSync(join(plain, '.uv-cache')), false)
+  for (const key of ['TEMP', 'TMP', 'TMPDIR']) assert.ok(samePath(env[key], join(worker, '.ml-tmp')), `uv project ${key}`)
+  assert.equal(readFileSync(join(worker, '.ml-tmp', '.gitignore'), 'utf8'), '*\n')
 })
 
 test('uvSyncRequired only for a uv verification without a main .venv', (t) => {
@@ -230,7 +235,10 @@ test('uv project with a synced main .venv: worker, verify command and verifier r
     assert.equal(call.shellEnv.UV_NO_SYNC, '1')
     assert.equal(call.shellEnv.UV_OFFLINE, '1')
     assert.ok(samePath(call.shellEnv.UV_CACHE_DIR, join(call.cwd, '.uv-cache')))
-    assert.deepEqual(call.childEnv, call.shellEnv, 'the Codex child gets the same values')
+    for (const key of ['TEMP', 'TMP', 'TMPDIR']) assert.ok(samePath(call.shellEnv[key], join(call.cwd, '.ml-tmp')), `${call.phase} ${key}`)
+    // The fake Codex child only echoes UV_* and PYTHONDONTWRITEBYTECODE, so compare those.
+    const sharedKeys = Object.keys(call.shellEnv).filter((key) => !['TEMP', 'TMP', 'TMPDIR'].includes(key))
+    assert.deepEqual(call.childEnv, Object.fromEntries(sharedKeys.map((key) => [key, call.shellEnv[key]])), 'the Codex child gets the same values')
     assert.equal(call.command.code, 0, call.command.output)
     assert.match(call.prompt, /SANDBOX LIMITS/)
     assert.match(call.prompt, /UV_PROJECT_ENVIRONMENT/)

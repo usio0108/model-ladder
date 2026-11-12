@@ -73,6 +73,7 @@ Project overrides remain effective, and guard changes do not invalidate Codex re
 A dead worker or invalid output fails that step; failed diagnosis uses the default legal move.
 Authentication, model-access, and sandbox errors stop Codex rather than triggering escalation.
 Codex worker and verifier sandboxes have no network and a worktree without `.venv` or `node_modules`. A uv project borrows the main checkout's `.venv` read-only through role environment variables (`sandboxEnv` in `scripts/codex-run.mjs`); a uv verification without that `.venv`, or a failed npm-style check without `node_modules`, stops once instead of escalating.
+The verify command and the verifier run in a separate `attempt-<n>-verify` worktree built from the worker snapshot, so ignored files the worker left behind (different Windows sandbox account) never reach them; post-verification checks compare that worktree to the snapshot, and the worker worktree stays the retained one.
 
 ## Isolation and concurrent runs
 
