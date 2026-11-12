@@ -204,3 +204,20 @@ each Workflow call; the workflow itself reads no clock and imports nothing. A
 structured journal continues one agent at a time without repeating model calls.
 These timings include host overhead and gaps inside each call; preflight-to-finish
 elapsed time includes user/host waits. Open boundaries are censored on errors.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Claude Code on Pro does not offer or run the Workflow tool, so automation is unavailable. | The ladder runs as a Workflow, and Pro needs it enabled first ([README](README.md#requirements-and-compatibility)). | Enable Workflow in `/config` before installing the plugin. If the first run asks whether to allow Workflow, choose "don't ask again". |
+| Preflight returns `ERROR`: "model-ladder needs a git repository with at least one commit". | The folder is not a Git repository, or `HEAD` does not resolve because there is no commit (`scripts/preflight.mjs`). | Run `git init` and make a first commit, or work in an existing repository. Otherwise do the task directly. |
+| On Windows, the worker error says `Refusing to use <path> as an isolation worktree`. | Claude Code can refuse every isolation worktree, for example by comparing `c:\` and `C:/` as different paths (CHANGELOG 1.2.5). | Update to 1.2.6 or later. A refused worktree no longer ends the call: the worker runs `git worktree add --detach` under `.claude/worktrees/` and works only there, within the same call. Errors keep 600 characters so both paths show. If it still fails, check `git worktree list` and `git worktree prune`. |
+| Codex autorun, the panel or the HUD is missing, or the hook is marked modified in `/hooks`. | Codex skips SessionStart hooks that are untrusted or modified, and trust applies to the current definition and content, so every plugin update needs it again. Running the script by hand does not establish trust. | Open `/hooks` in Codex CLI, review and re-trust the model-ladder SessionStart hook, then start a new session ([Band and panel details](#band-and-panel-details)). |
+| On Windows, the HUD refuses to start with "Codex HUD requires a native executable". | An npm-installed `codex` is a `.cmd` or `.bat` shim, which the HUD does not support (`scripts/codex-hud.mjs`). | Put the native `codex.exe` on PATH, or set `CODEX_BINARY` to it ([Codex runner and HUD](#codex-runner-and-hud)). |
+| The HUD prints "node-pty could not be loaded" and starts plain `codex`. | `node-pty` is installed in the background (`npm ci --omit=dev`) the first time and may still be installing or have failed. Without it there is no HUD, but `codex` still runs. | Wait for SessionStart to report it ready, or run `npm ci` in the plugin directory. The install log is `npm-ci.log` in `<system temp>/model-ladder/<repo hash>/`. Then open a new PowerShell window. |
+| Scripts fail on an old Node.js. | The plugin requires Node.js 20 and does not install it; CI tests 20 and 22 ([README](README.md#requirements-and-compatibility)). | Install Node.js 20 or later. |
+| The Claude Code band does not appear. | The band requires Claude Code 2.1.290 or later. | Update Claude Code. |
+| The report is `DIRTY`. | Another run, or you, left uncommitted changes in the checkout. | Confirm whether to build on those changes ([Concurrent runs](#concurrent-runs)). |
+| The report is `STALE_RUN`. | A lock is dead, unreadable or legacy, or belongs to a crashed Claude session. | Inspect the listed locks and processes, then authorize `--clear-stale` or `clearStale: true`, or use `--clear-stale=<runId>` for a crashed Claude session. Never clear a lock with a live process ([Concurrent runs](#concurrent-runs)). |
+| Ctrl+] does nothing in the Codex HUD with an IME such as Bopomofo. | The IME turns Ctrl+] into the character `】`, so the HUD cannot see it (CHANGELOG 1.2.5). | Press Alt+H instead; it is not forwarded to Codex ([Codex runner and HUD](#codex-runner-and-hud)). |
+| You cannot find a run's files or logs. | Locks and patches are in `.model-ladder/runs/`; Codex worktrees, logs and `result.json` are in the system temp directory. | See [Run files](#run-files), and use the paths the runner returns. |

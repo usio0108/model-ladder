@@ -181,3 +181,20 @@ Claude Code 即時讀取 run 鎖中的 `phaseExpected`（每個 workflow 邊界�
 每個可用訂閱時間窗分別比較預估消耗、剩餘額度與啟用中的 usageGuard 門檻。分鐘或 token 不換算成訂閱百分比。證據必須是新鮮的前後觀測、相同來源、帳號識別與重置時間、未下降的百分比，並且可歸因、排除帳號同時活動。目前來源無法證明沒有其他帳號活動，因此一般回傳 unknown 與原因。過期、缺少時間戳、跨重置、失敗或未完成的資料不作為可靠證據；既有 guard 保持有效。階段邊界以整個 run 的消耗範圍保守比較目前餘額，不假設線性消耗速率。
 
 Claude 由主控端在每次 Workflow 呼叫前後執行 Node 記錄命令。Workflow 不讀時鐘、不匯入模組；結構化 journal 每次接續一個代理，重播先前結果不再呼叫模型。階段計時包含該次呼叫內的主控端成本；preflight 到 finish 的總時間包含等待。錯誤時未結束的邊界保留為截尾觀測。
+
+## 疑難排解
+
+| 症狀 | 原因 | 解法 |
+|---|---|---|
+| Pro 方案的 Claude Code 沒有 Workflow 工具，或無法使用自動化。 | ladder 以 Workflow 執行，Pro 方案須先啟用（[README](README.zh-TW.md#需求與相容性)）。 | 安裝外掛前先在 `/config` 啟用 Workflow。第一次執行若詢問是否允許 Workflow，選「不再詢問」。 |
+| preflight 回傳 `ERROR`：「model-ladder needs a git repository with at least one commit」。 | 資料夾不是 Git repo，或尚無任何 commit 導致 `HEAD` 無法解析（`scripts/preflight.mjs`）。 | 執行 `git init` 並建立第一個 commit，或改在既有 repo 中使用；否則請直接做該任務。 |
+| Windows 上 worker 錯誤出現 `Refusing to use <path> as an isolation worktree`。 | Claude Code 可能拒絕所有隔離 worktree，例如把 `c:\` 與 `C:/` 視為不同路徑（CHANGELOG 1.2.5）。 | 更新到 1.2.6 或以上。worktree 被拒後不再結束該次呼叫：worker 會在同一次呼叫內於 `.claude/worktrees/` 以 `git worktree add --detach` 建立自己的 worktree，只在其中工作。錯誤訊息保留 600 字元，可看到兩個路徑。仍失敗時檢查 `git worktree list` 與 `git worktree prune`。 |
+| Codex 的 autorun、panel 或 HUD 沒出現，或 `/hooks` 顯示 hook 已修改。 | Codex 會略過未信任或已修改的 SessionStart hook；信任綁定目前的定義與內容，因此每次更新外掛後都需重新信任。手動執行腳本不會建立信任。 | 在 Codex CLI 開啟 `/hooks`，檢閱並重新信任 model-ladder 的 SessionStart hook，再開新 session（[Band 與 panel 詳細說明](#band-與-panel-詳細說明)）。 |
+| Windows 上 HUD 無法啟動，出現「Codex HUD requires a native executable」。 | 以 npm 安裝的 `codex` 是 `.cmd` 或 `.bat` shim，HUD 不支援（`scripts/codex-hud.mjs`）。 | 讓原生 `codex.exe` 出現在 PATH，或以 `CODEX_BINARY` 指定它（[Codex runner 與 HUD](#codex-runner-與-hud)）。 |
+| HUD 顯示「node-pty could not be loaded」並改啟動一般 `codex`。 | `node-pty` 第一次會在背景安裝（`npm ci --omit=dev`），可能還在安裝或安裝失敗。沒有它就沒有 HUD，但 `codex` 仍可執行。 | 等待 SessionStart 顯示就緒，或在外掛目錄執行 `npm ci`。安裝記錄是 `<system temp>/model-ladder/<repo hash>/` 下的 `npm-ci.log`。之後開新的 PowerShell 視窗。 |
+| 舊版 Node.js 上腳本執行失敗。 | 外掛需要 Node.js 20，且不會代為安裝；CI 測試 20 與 22（[README](README.zh-TW.md#需求與相容性)）。 | 安裝 Node.js 20 或以上。 |
+| Claude Code 的 band 沒有出現。 | band 需要 Claude Code 2.1.290 或以上。 | 更新 Claude Code。 |
+| 報告為 `DIRTY`。 | 其他 run 或你自己在 checkout 中留下未提交變更。 | 確認是否以這些變更為基礎執行（[並行執行](#並行執行)）。 |
+| 報告為 `STALE_RUN`。 | 鎖已失效、無法讀取或為舊格式，或屬於已當機的 Claude session。 | 檢查列出的鎖與程序，再授權 `--clear-stale` 或 `clearStale: true`；當機的 Claude session 則用 `--clear-stale=<runId>`。切勿清除仍有存活程序的鎖（[並行執行](#並行執行)）。 |
+| 使用注音等輸入法時，Ctrl+] 在 Codex HUD 中沒有反應。 | 輸入法會把 Ctrl+] 變成字元 `】`，HUD 看不到按鍵（CHANGELOG 1.2.5）。 | 改按 Alt+H；它不會轉發給 Codex（[Codex runner 與 HUD](#codex-runner-與-hud)）。 |
+| 找不到 run 的檔案或記錄。 | 鎖與 patch 在 `.model-ladder/runs/`；Codex worktree、記錄與 `result.json` 在系統暫存目錄。 | 見[執行檔案](#執行檔案)，並使用 runner 回傳的路徑。 |

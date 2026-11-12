@@ -188,7 +188,7 @@ Guard controls save to your personal settings, and project overrides still take 
 
 The separate Codex terminal panel does not show context usage; enter `g` to toggle the guard, `t 90` to set the threshold, `h` to write a handoff template, or `q` to close the panel, followed by Enter.
 
-See [band and panel details](USAGE.md#band-and-panel-details) for handoff fallbacks, settings behavior, and troubleshooting.
+See [band and panel details](USAGE.md#band-and-panel-details) for handoff fallbacks and settings behavior, and [troubleshooting](USAGE.md#troubleshooting) for common problems.
 
 ## Usage guard
 

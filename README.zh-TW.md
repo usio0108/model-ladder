@@ -110,12 +110,12 @@ codex plugin add model-ladder@model-ladder
 
 model-ladder 目前為 **Beta**：行為、設定與檔案結構可能隨版本調整（見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)）。已知限制：
 
-- Windows 上停止 run 時以 `taskkill` 終止整個程序樹；若 Windows 拒絕，run 會回報失敗並保留登記，不會宣稱已停止（[USAGE.md](USAGE.md#usage-protection-details)）。被強制終止的 run 可能沒有 checkpoint 或 `result.json`，需重新執行原任務（[USAGE.md](USAGE.md#usage-protection-details)）。
+- Windows 上停止 run 時以 `taskkill` 終止整個程序樹；若 Windows 拒絕，run 會回報失敗並保留登記，不會宣稱已停止（[USAGE.zh-TW.md](USAGE.zh-TW.md#使用量保護細節)）。被強制終止的 run 可能沒有 checkpoint 或 `result.json`，需重新執行原任務（[USAGE.zh-TW.md](USAGE.zh-TW.md#使用量保護細節)）。
 - 獨立的 Codex 終端 panel 不顯示 context 用量（[Band](#bandclaude-code)）。
 - Pro 方案須先在 `/config` 啟用 Workflow 再安裝外掛，否則無法使用自動化。
-- Windows 需要原生 `codex.exe`（透過 PATH 或 `CODEX_BINARY`），不支援 `.cmd` 或 `.bat` shim（[USAGE.md](USAGE.md#codex-runner-and-hud)、`scripts/codex-hud.mjs`）。
-- Codex HUD 必須由它啟動 Codex，無法接入執行中的 session，且自動設定 PowerShell 僅限 Windows（[USAGE.md](USAGE.md#codex-runner-and-hud)）。
-- Claude 用量讀數僅 Pro/Max 方案提供；用量未知時保護不會阻擋執行（[USAGE.md](USAGE.md#usage-protection-details)）。
+- Windows 需要原生 `codex.exe`（透過 PATH 或 `CODEX_BINARY`），不支援 `.cmd` 或 `.bat` shim（[USAGE.zh-TW.md](USAGE.zh-TW.md#codex-runner-與-hud)、`scripts/codex-hud.mjs`）。
+- Codex HUD 必須由它啟動 Codex，無法接入執行中的 session，且自動設定 PowerShell 僅限 Windows（[USAGE.zh-TW.md](USAGE.zh-TW.md#codex-runner-與-hud)）。
+- Claude 用量讀數僅 Pro/Max 方案提供；用量未知時保護不會阻擋執行（[USAGE.zh-TW.md](USAGE.zh-TW.md#使用量保護細節)）。
 - macOS 未測（見上表）。
 
 ## 使用方式
@@ -188,7 +188,7 @@ haiku-5.5/low       5s         Summarize the README install steps
 
 Codex 使用獨立 terminal panel 且不顯示 context，輸入 `g` 切換保護、`t 90` 設門檻、`h` 寫交接模板、`q` 關閉 panel，每項指令後按 Enter。
 
-交接備案、設定行為與疑難排解見 [Band 與 panel 詳細說明](USAGE.zh-TW.md#band-與-panel-詳細說明)。
+交接備案與設定行為見 [Band 與 panel 詳細說明](USAGE.zh-TW.md#band-與-panel-詳細說明)，疑難排解見[疑難排解](USAGE.zh-TW.md#疑難排解)。
 
 ## 使用量保護
 
