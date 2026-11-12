@@ -448,6 +448,7 @@ Also return:
     // Built here, not by the skill: the question box shows one flat paragraph, so the list goes in a message.
     acceptanceMessage: `**Ladder start:** ${label(start)} — ${startReason}\n\n**Acceptance criteria (proposed)**\n${acceptance.map((a, i) => `${i + 1}. ${a}`).join('\n')}\n\nTip: run /model-ladder:create-verification-skill to generate .claude/skills/verify/; the ladder will use it automatically next time.`,
     acceptanceQuestion: 'Run with these criteria?',
+    acceptanceStart: label(start),
     routeTokens: tokens,
   }
 }

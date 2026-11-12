@@ -237,6 +237,8 @@ test('no verify returns for user input, with the router proposal', async () => {
   assert.deepEqual(out.plan.acceptance, ['prints NT$ 1,234'])
   assert.match(out.plan.acceptanceMessage, /\*\*Acceptance criteria \(proposed\)\*\*\n1\. prints NT\$ 1,234\n\nTip: run \/model-ladder:create-verification-skill to generate \.claude\/skills\/verify\/;/)
   assert.equal(out.plan.acceptanceQuestion, 'Run with these criteria?')
+  assert.equal(out.plan.acceptanceStart, `${routed.model}/${routed.effort}`)
+  assert.equal(out.plan.startReason, routed.reason)
 })
 
 test('with a run lock, it returns after routing so the skill can claim the scope, then runs the plan', async () => {
