@@ -72,6 +72,7 @@ Project overrides remain effective, and guard changes do not invalidate Codex re
 `legalMoves` and `pickMove` come from the generated shared rules, with drift checked by tests.
 A dead worker or invalid output fails that step; failed diagnosis uses the default legal move.
 Authentication, model-access, and sandbox errors stop Codex rather than triggering escalation.
+Codex worker and verifier sandboxes have no network and a worktree without `.venv` or `node_modules`. A uv project borrows the main checkout's `.venv` read-only through role environment variables (`sandboxEnv` in `scripts/codex-run.mjs`); a uv verification without that `.venv`, or a failed npm-style check without `node_modules`, stops once instead of escalating.
 
 ## Isolation and concurrent runs
 

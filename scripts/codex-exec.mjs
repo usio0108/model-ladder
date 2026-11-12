@@ -88,16 +88,19 @@ export function processRun(command, args, { cwd, input = '', timeoutMs = 600000,
   })
 }
 
-export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs, signal, executable, onActivity, schema = SCHEMAS[phase] }) {
+// env reaches this one Codex child and, through shell_environment_policy.set, every command it runs in its sandbox,
+// whatever the person's inherit policy. It never changes the runner's own environment.
+export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs, signal, executable, onActivity, schema = SCHEMAS[phase], env = {} }) {
   const schemaPath = join(run, `${phase}.schema.json`)
   const outputPath = join(run, `${phase}.output.json`)
   writeFileSync(schemaPath, JSON.stringify(schema))
   rmSync(outputPath, { force: true })
-  const args = [...(executable?.prefixArgs ?? []), 'exec', '-m', cell.model, '-c', `model_reasoning_effort=${JSON.stringify(cell.effort)}`,
+  const shellEnv = Object.entries(env).flatMap(([key, value]) => ['-c', `shell_environment_policy.set.${key}=${JSON.stringify(value)}`])
+  const args = [...(executable?.prefixArgs ?? []), 'exec', '-m', cell.model, '-c', `model_reasoning_effort=${JSON.stringify(cell.effort)}`, ...shellEnv,
     '-C', cwd, '--json', '--output-schema', schemaPath, '-o', outputPath, '--sandbox', sandbox, '-']
   let result, events = [], pending = ''
   try {
-    result = await processRun(executable?.command ?? process.env.CODEX_BINARY ?? 'codex', args, { cwd, input: `This is one internal model-ladder role. Do not invoke model-ladder skills, workflows or runners recursively; perform only the assigned role.\n\n${prompt}`, timeoutMs, signal, env: { MODEL_LADDER_ROLE: phase, MODEL_LADDER_AUTORUN: '0', MODEL_LADDER_BAND: '0' }, onStdout: (data) => {
+    result = await processRun(executable?.command ?? process.env.CODEX_BINARY ?? 'codex', args, { cwd, input: `This is one internal model-ladder role. Do not invoke model-ladder skills, workflows or runners recursively; perform only the assigned role.\n\n${prompt}`, timeoutMs, signal, env: { ...env, MODEL_LADDER_ROLE: phase, MODEL_LADDER_AUTORUN: '0', MODEL_LADDER_BAND: '0' }, onStdout: (data) => {
       const lines = (pending + data).split('\n'); pending = lines.pop()
       for (const line of lines) try {
         const event = JSON.parse(line)

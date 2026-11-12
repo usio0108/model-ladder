@@ -4,7 +4,12 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
-## [Unreleased]
+## [1.2.8] - 2026-11-12
+
+- Codex 的 worker 與 verifier 現在能在 sandbox 中跑 uv 專案的測試；該 sandbox 沒有網路，worktree 也沒有 `.venv`。過去 `uv run pytest` 會因 uv 快取存取被拒或無網路而失敗，diagnose 回 `stop_environment`，run 就此停止。現在 worker、verify 指令與 verifier 會拿到指向主 checkout `.venv` 的 `UV_PROJECT_ENVIRONMENT`，加上 `UV_NO_SYNC`、`UV_OFFLINE`、`PYTHONDONTWRITEBYTECODE` 與位於 worktree 內的 `UV_CACHE_DIR`，並透過 `shell_environment_policy.set` 傳給 Codex。主 `.venv` 不會被寫入，worktree 不會出現 `.venv`，也不改任何全域變數。
+- uv 驗證找不到主 `.venv` 時，Codex run 會在 routing 前停止，回報 `errorCode: "UV_SYNC_REQUIRED"` 與「Run uv sync in the main checkout first」（需要先在主 checkout 跑 uv sync），不會重試。
+- Node 專案的 worktree 沒有 `node_modules` 而 npm 類 verify 指令失敗時，現在以「Frontend checks not run」（前端檢查未執行）停止，絕不當作通過或重試。不建立 `node_modules` junction。
+- worker 與 verifier 的 prompt 會說明 sandbox 限制；diagnose 回 `stop_environment` 時，結尾附上可照做的提示（在主 checkout 跑 `uv sync`，或設定 `verify`）。Claude runtime 不變。
 
 ## [1.2.7] - 2026-11-12
 

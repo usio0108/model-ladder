@@ -112,6 +112,18 @@ Claude 模型別名會使用可用版本，Codex 的模型 ID 與 effort 請依�
 Claude 外掛選單提供 DIRECT 門檻 20–80（每 10 一級），另可選 `off`。
 未指定 `verify` 時，Codex 優先使用專案驗證 skill，再尋找既有 npm、pytest、Cargo、Go、Maven 或 Make 檢查。
 
+### Codex sandbox：uv 與 Node 專案
+
+Codex 的 worker 與 verifier 在沒有網路、只能寫入該次嘗試 worktree 的 sandbox 中執行。新建的 worktree 沒有 `.venv`，也沒有 `node_modules`。runner 不會放寬 sandbox，也不會改動你的全域環境變數。
+
+| 專案 | runner 的做法 |
+|---|---|
+| uv 專案（有 `uv.lock`），主 checkout 已有 `.venv` | worker、verify 指令與 verifier 會拿到：`UV_PROJECT_ENVIRONMENT` 指向主 checkout 的 `.venv`（或你自己設定的 `UV_PROJECT_ENVIRONMENT`）、`UV_NO_SYNC=1`、`UV_OFFLINE=1`、`UV_PYTHON_DOWNLOADS=never`、`PYTHONDONTWRITEBYTECODE=1`，以及 `UV_CACHE_DIR=<worktree>/.uv-cache`。Codex 角色透過 `shell_environment_policy.set` 取得這些值。`uv run pytest` 因此能離線使用主 `.venv`，不同步也不寫入它，worktree 裡不會產生 `.venv`。快取目錄有自己的 `.gitignore`，不會進入 patch，並隨 worktree 一起刪除。 |
+| uv 專案，verify 指令或驗證 skill 用到 `uv`，但主 checkout 沒有 `.venv` | run 在任何角色開始前停止，回報 `STOPPED`、`errorCode: "UV_SYNC_REQUIRED"` 與「Run uv sync in the main checkout first」（需要先在主 checkout 跑 uv sync），不會重試。請在主 checkout 執行 `uv sync` 後重跑任務。 |
+| 有相依套件的 Node 專案，verify 使用 npm、npx、pnpm、yarn 或 bun，worktree 沒有 `node_modules` 且指令失敗 | run 以 `STOPPED` 停止並回報「Frontend checks not run」（前端檢查未執行），絕不當作通過，也不會改用更強的模型重試。runner 不建立 `node_modules` junction，所以清除 worktree 時不會順著連結刪到主 checkout。請自行執行檢查，或把 `verify` 設成不需安裝的檢查。 |
+
+worker 與 verifier 的 prompt 都會說明這些限制。diagnose 因環境問題停止時，報告會附上同樣可照做的提示：先在主 checkout 執行 `uv sync`，或在 `.codex/model-ladder.json` 把 `verify` 設成不需安裝或網路的指令。Claude runtime 不受影響。
+
 | 環境變數 | 用途 |
 |---|---|
 | `CLAUDE_CONFIG_DIR` / `CODEX_HOME` | 改變個人設定目錄。 |

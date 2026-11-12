@@ -4,7 +4,12 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
-## [Unreleased]
+## [1.2.8] - 2026-11-12
+
+- Codex workers and verifiers can now run a uv project's tests in their sandbox, which has no network and whose worktree has no `.venv`. Before, `uv run pytest` failed on the uv cache (access denied) or on the network, diagnosis returned `stop_environment`, and the run stopped. The worker, the verify command and the verifier now get `UV_PROJECT_ENVIRONMENT` pointing at the main checkout's `.venv` with `UV_NO_SYNC`, `UV_OFFLINE`, `PYTHONDONTWRITEBYTECODE` and a `UV_CACHE_DIR` inside the worktree, passed to Codex through `shell_environment_policy.set`. Nothing writes to the main `.venv`, no `.venv` appears in the worktree, and no global variable changes.
+- When a uv verification has no main `.venv`, the Codex run stops before routing with `errorCode: "UV_SYNC_REQUIRED"` and "Run uv sync in the main checkout first", and does not retry.
+- A failing npm-style verify command in a Node project whose worktree has no `node_modules` now stops as "Frontend checks not run", never as a pass or a retry. No `node_modules` junction is created.
+- Worker and verifier prompts state the sandbox limits, and a `stop_environment` diagnosis ends with an actionable hint (run `uv sync` in the main checkout, or set `verify`). The Claude runtime is unchanged.
 
 ## [1.2.7] - 2026-11-12
 

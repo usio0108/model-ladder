@@ -72,6 +72,7 @@ Claude 外掛的 `worker_skills`、`verifier_skills` 併入個人層，專案同
 `legalMoves`、`pickMove` 來自共用產生規則，測試會檢查是否偏離來源。
 Worker 死亡或輸出無效算該步驟失敗，診斷失敗使用預設合法移動。
 Codex 的認證、模型存取與 sandbox 錯誤直接停止，不升級重試。
+Codex worker 與 verifier 的 sandbox 沒有網路，worktree 也沒有 `.venv` 或 `node_modules`。uv 專案透過角色環境變數以唯讀方式借用主 checkout 的 `.venv`（`scripts/codex-run.mjs` 的 `sandboxEnv`）；沒有該 `.venv` 的 uv 驗證，或缺少 `node_modules` 而失敗的 npm 類檢查，只停止一次，不升級重試。
 
 ## 隔離與並行執行
 

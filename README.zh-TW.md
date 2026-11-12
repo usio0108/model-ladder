@@ -117,6 +117,7 @@ model-ladder 目前為 **Beta**：行為、設定與檔案結構可能隨版本�
 - Codex HUD 必須由它啟動 Codex，無法接入執行中的 session，且自動設定 PowerShell 僅限 Windows（[USAGE.zh-TW.md](USAGE.zh-TW.md#codex-runner-與-hud)）。
 - Claude 用量讀數僅 Pro/Max 方案提供；用量未知時保護不會阻擋執行（[USAGE.zh-TW.md](USAGE.zh-TW.md#使用量保護細節)）。
 - macOS 未測（見上表）。
+- Codex 的 worker 與 verifier 沒有網路，它們的 worktree 也沒有 `.venv` 或 `node_modules`。uv 專案會以唯讀方式借用主 checkout 的 `.venv`，所以需要先在主 checkout 跑 `uv sync`；需要 `node_modules` 的 Node 專案檢查會回報為未執行（[USAGE.zh-TW.md](USAGE.zh-TW.md#codex-sandboxuv-與-node-專案)）。
 
 ## 使用方式
 

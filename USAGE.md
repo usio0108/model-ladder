@@ -111,6 +111,18 @@ Claude model aliases follow available versions; configure Codex model IDs and ef
 Claude's plugin picker offers DIRECT values 20–80 in steps of 10, plus `off`.
 Without explicit `verify`, Codex prefers a project verify skill, then discovers existing npm, pytest, Cargo, Go, Maven, or Make checks.
 
+### Codex sandbox: uv and Node projects
+
+Codex workers and verifiers run in a sandbox with no network that may write only inside the attempt worktree. A fresh worktree has no `.venv` and no `node_modules`. The runner does not loosen the sandbox and does not change your global environment variables.
+
+| Project | What the runner does |
+|---|---|
+| uv project (`uv.lock`) whose main checkout has `.venv` | The worker, the verify command and the verifier get `UV_PROJECT_ENVIRONMENT` set to the main checkout's `.venv` (or to your own `UV_PROJECT_ENVIRONMENT`), `UV_NO_SYNC=1`, `UV_OFFLINE=1`, `UV_PYTHON_DOWNLOADS=never`, `PYTHONDONTWRITEBYTECODE=1` and `UV_CACHE_DIR=<worktree>/.uv-cache`. Codex roles receive them through `shell_environment_policy.set`. `uv run pytest` then runs offline against the main `.venv` without syncing or writing to it, and no `.venv` is created in the worktree. The cache holds its own `.gitignore`, so it is never part of the patch, and it is removed with the worktree. |
+| uv project whose verify command or verify skill uses `uv`, and the main checkout has no `.venv` | The run stops before any role with `STOPPED`, `errorCode: "UV_SYNC_REQUIRED"` and "Run uv sync in the main checkout first". It does not retry. Run `uv sync` in the main checkout, then rerun the task. |
+| Node project with dependencies, verify uses npm, npx, pnpm, yarn or bun, the worktree has no `node_modules`, and the command fails | The run stops with `STOPPED` and "Frontend checks not run". This is never reported as a pass, and no stronger model is tried. The runner makes no `node_modules` junction, so worktree cleanup never follows a link into the main checkout. Run the checks yourself, or set `verify` to a check that needs no install. |
+
+Worker and verifier prompts state these limits. When diagnosis stops for an environment problem, the report adds the same actionable hint: run `uv sync` in the main checkout first, or set `verify` in `.codex/model-ladder.json` to a command that needs no install or network. The Claude runtime is unchanged.
+
 | Environment variable | Effect |
 |---|---|
 | `CLAUDE_CONFIG_DIR` / `CODEX_HOME` | Change the personal settings directory. |

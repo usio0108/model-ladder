@@ -23,7 +23,21 @@ assert.ok(['read-only', 'workspace-write'].includes(arg('--sandbox')))
 const scenario = JSON.parse(readFileSync(join(root, 'scenario.json'), 'utf8'))
 const log = join(root, '.model-ladder', 'fake-calls.jsonl')
 mkdirSync(join(root, '.model-ladder'), {recursive:true})
-appendFileSync(log, JSON.stringify({phase,cwd,model:arg('-m'),effort:arg('-c'),sandbox:arg('--sandbox'),prompt}) + '\n')
+// What Codex would hand its sandboxed shell commands through shell_environment_policy.set.
+const shellEnv = Object.fromEntries(args.flatMap((value, i) => {
+  const match = args[i - 1] === '-c' && /^shell_environment_policy\.set\.([A-Z_][A-Z0-9_]*)=(.*)$/.exec(value)
+  return match ? [[match[1], JSON.parse(match[2])]] : []
+}))
+const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(?:UV_|PYTHONDONTWRITEBYTECODE$)/.test(key)))
+let command = null
+if (scenario.commands?.[phase]) {
+  // Runs like a Codex sandbox command: the runner's UV_* values are dropped, so only the -c set entries can reach it.
+  const { spawnSync } = await import('node:child_process')
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^UV_|^PYTHONDONTWRITEBYTECODE$/.test(key)))
+  const ran = spawnSync(process.execPath, [scenario.commands[phase]], { cwd, env: { ...env, ...shellEnv }, encoding: 'utf8' })
+  command = { code: ran.status, output: (ran.stdout ?? '') + (ran.stderr ?? '') }
+}
+appendFileSync(log, JSON.stringify({phase,cwd,model:arg('-m'),effort:arg('-c'),sandbox:arg('--sandbox'),prompt,shellEnv,childEnv,command}) + '\n')
 const calls = readFileSync(log,'utf8').trim().split('\n').map(JSON.parse)
 const number = calls.filter((call) => call.phase === 'worker').length
 if (scenario.environment === phase && scenario.limitEvent) {
@@ -64,6 +78,7 @@ if (phase === 'worker') {
     execFileSync('git',['worktree','add','--detach','-q',scenario.createUnrelated,'HEAD'],{cwd:root})
   }
   output = {status:'done',summary:scenario.readOnly ? 'Greeting comes from greeting.mjs.' : 'Fixed greeting',blockedReason:null}
+  if (command && command.code !== 0) output = {status:'blocked',summary:'Self-check failed',blockedReason:command.output}
   if (schema.properties.skills) output.skills = scenario.skills ?? []
 }
 if (phase === 'verify') {
@@ -73,6 +88,7 @@ if (phase === 'verify') {
   }
 }
 if (phase === 'verify') output = {pass:scenario.verifyPass ?? true,reason:scenario.verifyPass === false ? 'Requested behavior is missing' : 'Criteria met',output:'Inspected actual source'}
+if (phase === 'verify' && command && command.code !== 0) output = {pass:false,reason:'Check failed',output:command.output}
 if (phase === 'diagnose') output = {action:scenario.stopEnvironment ? 'stop_environment':'raise_effort',model:scenario.invalidMove ? 'unavailable':'cheap',effort:scenario.invalidMove ? 'ultra':'medium',reason:'Retry',hint:'Fix the greeting'}
 if (scenario.badOutput === phase) output = {invalid:true}
 writeFileSync(arg('-o'),JSON.stringify(output))

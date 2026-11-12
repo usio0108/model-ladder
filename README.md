@@ -117,6 +117,7 @@ model-ladder is **Beta**: behavior, settings and file layouts may change between
 - The Codex HUD must launch Codex; it cannot attach to a running session, and the automatic PowerShell setup is Windows only ([USAGE.md](USAGE.md#codex-runner-and-hud)).
 - Claude usage readings exist only on Pro/Max plans; with unknown usage the guard does not block ([USAGE.md](USAGE.md#usage-protection-details)).
 - macOS is untested (see the table above).
+- Codex workers and verifiers have no network, and their worktrees have no `.venv` or `node_modules`. A uv project borrows the main checkout's `.venv` read-only, so run `uv sync` in the main checkout first; a Node project whose checks need `node_modules` reports them as not run ([USAGE.md](USAGE.md#codex-sandbox-uv-and-node-projects)).
 
 ## How to use
 
