@@ -37,7 +37,7 @@ model-ladder is a [Claude Code](https://code.claude.com) and Codex plugin. The R
 
 ## Install
 
-Requires Git and Node.js 20 or later (the plugin does not install Node.js). Use it in a Git repository with at least one commit. In Codex, trust the plugin hooks in `/hooks` first.
+Check the [requirements](#requirements-and-compatibility) first, and use it in a Git repository with at least one commit.
 
 To update the Codex plugin:
 
@@ -46,7 +46,7 @@ To update the Codex plugin:
 3. Start a new Codex session. The hook points the `codex` function in your PowerShell profile at the new version automatically.
 4. On Windows, the first launch of the new version installs node-pty in the background, so that launch may start plain `codex`. Open a new PowerShell window and run `codex` to get the new HUD.
 
-Install and sign in to Claude Code first. For automation, make sure the Workflow tool is available. On Pro, enable it in `/config` before you install the plugin.
+Install and sign in to Claude Code first.
 
 ```text
 # Claude Code
@@ -63,7 +63,60 @@ codex plugin marketplace add usio0108/model-ladder
 codex plugin add model-ladder@model-ladder
 ```
 
-Restart Claude Code after installing; top-level tasks then go through `/model-ladder:run` automatically. If the first run asks whether to allow Workflow, choose "don't ask again". model-ladder keeps `.model-ladder/` and `.claude/worktrees/` out of git itself (in `.git/info/exclude`), so you do not edit `.gitignore`. Update with `claude plugin update model-ladder@model-ladder` (automatic when the marketplace has auto-update on); reports announce new versions ([CHANGELOG.md](CHANGELOG.md)).
+Restart Claude Code after installing; top-level tasks then go through `/model-ladder:run` automatically. If the first run asks whether to allow Workflow, choose "don't ask again". Update with `claude plugin update model-ladder@model-ladder` (automatic when the marketplace has auto-update on); reports announce new versions ([CHANGELOG.md](CHANGELOG.md)).
+
+## Requirements and compatibility
+
+| Item | Minimum | Tested status |
+|---|---|---|
+| Claude Code | Any version with plugins and the Workflow tool; the band needs 2.1.290+ | Developed on Claude Code; no version matrix in CI. On Pro, enable Workflow in `/config` first |
+| Codex CLI | 0.160.1+, authenticated native `codex`; trust the plugin hooks in `/hooks` | Developed on Codex; no version matrix in CI |
+| Node.js | 20 (the plugin does not install it) | CI unit tests on 20 and 22 |
+| Git | Any recent Git; use a repository with at least one commit | Used by CI, no minimum version pinned |
+| Windows | Codex HUD needs a native `codex.exe` | CI unit tests on `windows-latest`; the main development platform |
+| Linux | | CI unit tests on `ubuntu-latest` |
+| macOS | | Untested (not in the CI matrix) |
+
+Source: [`.github/workflows/test.yml`](.github/workflows/test.yml) (ubuntu-latest and windows-latest, Node 20 and 22) and the version notes above. CI runs unit tests only; it does not run Claude Code or Codex.
+
+## What it changes, what leaves your machine, and how to turn it off
+
+| What | Details | How to turn it off |
+|---|---|---|
+| Daily update check | At most once a day, fetches `.claude-plugin/plugin.json` from `raw.githubusercontent.com` (3 s timeout, silent on failure), caches the result in `model-ladder-update-check.json` in the system temp directory, and the report mentions a newer version. No repository data is sent. | Set `MODEL_LADDER_NO_UPDATE_CHECK=1` |
+| `.git/info/exclude` | Appends `.model-ladder/` and `.claude/worktrees/` there (worktree-safe), so you do not edit `.gitignore`. Your tracked files are not changed. | Delete those two lines |
+| PowerShell profile (Windows, Codex only) | The Codex SessionStart hook adds one marked `function codex` block to your PowerShell 7 and Windows PowerShell profiles. It runs `codex` inside the HUD and falls back to native `codex.exe` when the HUD cannot run. | Set `"hudTakeover": false` in `~/.codex/model-ladder.json` (`band: false` also does); the next Codex session start removes the block. See [Uninstall](#uninstall) to remove it by hand |
+| `.model-ladder/` | Holds `runs/` (run locks), `history.jsonl`, `live.json`, `usage.json`, `context.json` and `HANDOFF.md`. Per-run Codex worktrees, logs and checkpoints are in the system temp directory under `model-ladder/<repo hash>/`. | Delete the directories (see [Uninstall](#uninstall)) |
+| Model calls and quota | One task can run a router, a worker, a verifier and, after a failure, further escalated worker and verifier attempts. This uses more of your Claude or Codex quota than doing the task directly. Your task text and code go to the models as in normal Claude Code or Codex use. | Say "no ladder" for a task, or turn off `autoRun` |
+| Usage guard | At the configured threshold (default 90%) a usage stop ends the current run and force-stops other registered model-ladder runs on the same machine. | Turn off `usageGuard` in the band or panel; hard limits still stop runs |
+| `autoRun` | On by default: top-level tasks go through the ladder automatically. | Set `autoRun` to `false` (Claude: `/plugin configure model-ladder`; Codex: `~/.codex/model-ladder.json`), or set `MODEL_LADDER_AUTORUN=0` |
+
+## Uninstall
+
+1. Remove the plugins:
+
+   ```sh
+   claude plugin uninstall model-ladder@model-ladder
+   codex plugin remove model-ladder@model-ladder
+   ```
+
+   Optionally also `claude plugin marketplace remove model-ladder` and `codex plugin marketplace remove model-ladder`.
+2. Remove the PowerShell profile block (Windows, Codex). First set `"hudTakeover": false` and start a Codex session so the hook removes it, or edit by hand: open `Documents\PowerShell\profile.ps1` and `Documents\WindowsPowerShell\profile.ps1` and delete everything from the line `# >>> model-ladder codex HUD >>>` through `# <<< model-ladder codex HUD <<<`. Leave the rest of the file alone.
+3. In each repository you used it in, delete `.model-ladder/` and `.claude/worktrees/`, and optionally the two matching lines in `.git/info/exclude`.
+4. Clean up leftover Git worktrees: `git worktree list`, then `git worktree remove --force <path>` for any model-ladder attempt, then `git worktree prune`.
+5. Delete `model-ladder/<repo hash>/` (and `model-ladder-update-check.json`) in the system temp directory.
+
+## Beta status and known limitations
+
+model-ladder is **Beta**: behavior, settings and file layouts may change between versions (see [CHANGELOG.md](CHANGELOG.md)). Known limitations:
+
+- On Windows, stopping a run kills the whole process tree with `taskkill`. If Windows denies it, the run reports the failure and keeps its registration rather than claiming it stopped ([USAGE.md](USAGE.md#usage-protection-details)). A force-killed run may lack a checkpoint or `result.json`; restart the original task ([USAGE.md](USAGE.md#usage-protection-details)).
+- The separate Codex terminal panel does not show context usage ([Band](#band-claude-code)).
+- On Pro, Workflow must be enabled in `/config` before you install the plugin, or automation is unavailable.
+- Windows requires a native `codex.exe` (PATH or `CODEX_BINARY`); a `.cmd` or `.bat` shim is not supported ([USAGE.md](USAGE.md#codex-runner-and-hud), `scripts/codex-hud.mjs`).
+- The Codex HUD must launch Codex; it cannot attach to a running session, and the automatic PowerShell setup is Windows only ([USAGE.md](USAGE.md#codex-runner-and-hud)).
+- Claude usage readings exist only on Pro/Max plans; with unknown usage the guard does not block ([USAGE.md](USAGE.md#usage-protection-details)).
+- macOS is untested (see the table above).
 
 ## How to use
 

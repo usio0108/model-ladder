@@ -37,7 +37,7 @@ model-ladder 是 [Claude Code](https://code.claude.com) 與 Codex 的外掛。Ro
 
 ## 安裝
 
-需要 Git 與 Node.js 20 以上（外掛不會自動安裝 Node.js）。請在至少有一個 commit 的 Git repo 中使用；Codex 需先在 `/hooks` 信任外掛 hooks。
+請先確認[需求](#需求與相容性)，並在至少有一個 commit 的 Git repo 中使用。
 
 更新 Codex 外掛的步驟：
 
@@ -46,7 +46,7 @@ model-ladder 是 [Claude Code](https://code.claude.com) 與 Codex 的外掛。Ro
 3. 開啟新的 Codex session。hook 會自動把 PowerShell profile 中的 `codex` 函式改指向新版本。
 4. Windows 上新版本第一次啟動時，node-pty 會在背景安裝，因此該次可能是一般 `codex`。之後開新的 PowerShell 視窗輸入 `codex`，即可進入新版 HUD。
 
-請先安裝並登入 Claude Code。若要使用自動化，請確認 Workflow 工具可用。Pro 方案請在安裝外掛前到 `/config` 啟用 Workflow。
+請先安裝並登入 Claude Code。
 
 ```text
 # Claude Code
@@ -63,7 +63,60 @@ codex plugin marketplace add usio0108/model-ladder
 codex plugin add model-ladder@model-ladder
 ```
 
-安裝後重開 Claude Code 即生效，之後的頂層任務會自動走 `/model-ladder:run`。第一次執行時若詢問是否允許 Workflow，選「不再詢問」即可。model-ladder 會自行把 `.model-ladder/` 與 `.claude/worktrees/` 排除在 git 之外（寫入 `.git/info/exclude`），不必手動改 `.gitignore`。更新：`claude plugin update model-ladder@model-ladder`（marketplace 開啟自動更新時會自動進行）。報告會提示新版本，見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)。
+安裝後重開 Claude Code 即生效，之後的頂層任務會自動走 `/model-ladder:run`。第一次執行時若詢問是否允許 Workflow，選「不再詢問」即可。更新：`claude plugin update model-ladder@model-ladder`（marketplace 開啟自動更新時會自動進行）。報告會提示新版本，見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)。
+
+## 需求與相容性
+
+| 項目 | 最低需求 | 測試狀態 |
+|---|---|---|
+| Claude Code | 需支援外掛與 Workflow 工具；band 需要 2.1.290+ | 以 Claude Code 開發；CI 沒有版本矩陣。Pro 方案請先到 `/config` 啟用 Workflow |
+| Codex CLI | 0.160.1+，需要已登入的原生 `codex`；先在 `/hooks` 信任外掛 hooks | 以 Codex 開發；CI 沒有版本矩陣 |
+| Node.js | 20（外掛不會自動安裝） | CI 單元測試涵蓋 20 與 22 |
+| Git | 近期版本即可；repo 至少要有一個 commit | CI 有使用，未固定最低版本 |
+| Windows | Codex HUD 需要原生 `codex.exe` | CI 單元測試涵蓋 `windows-latest`；主要開發平台 |
+| Linux | | CI 單元測試涵蓋 `ubuntu-latest` |
+| macOS | | 未測（不在 CI 矩陣內） |
+
+出處：[`.github/workflows/test.yml`](.github/workflows/test.yml)（ubuntu-latest 與 windows-latest，Node 20 與 22）及上述版本說明。CI 只跑單元測試，不會執行 Claude Code 或 Codex。
+
+## 它會動到什麼、什麼會離開你的電腦，以及如何關閉
+
+| 項目 | 說明 | 如何關閉 |
+|---|---|---|
+| 每日更新檢查 | 每天最多一次，向 `raw.githubusercontent.com` 取得 `.claude-plugin/plugin.json`（逾時 3 秒，失敗時靜默），結果快取在系統暫存目錄的 `model-ladder-update-check.json`，有新版時報告會提示。不會傳送 repo 資料。 | 設定 `MODEL_LADDER_NO_UPDATE_CHECK=1` |
+| `.git/info/exclude` | 把 `.model-ladder/` 與 `.claude/worktrees/` 附加進去（支援 worktree），不必改 `.gitignore`，也不會改動你已追蹤的檔案。 | 刪除這兩行 |
+| PowerShell profile（僅 Windows、Codex） | Codex SessionStart hook 會在 PowerShell 7 與 Windows PowerShell 的 profile 加入一段有標記的 `function codex`，讓 `codex` 在 HUD 中執行；HUD 無法執行時會退回原生 `codex.exe`。 | 在 `~/.codex/model-ladder.json` 設定 `"hudTakeover": false`（`band: false` 同樣有效），下次 Codex session 啟動時會移除該區塊；手動移除請見[解除安裝](#解除安裝) |
+| `.model-ladder/` | 內含 `runs/`（run 鎖）、`history.jsonl`、`live.json`、`usage.json`、`context.json` 與 `HANDOFF.md`。Codex 每次 run 的 worktree、log 與 checkpoint 放在系統暫存目錄的 `model-ladder/<repo hash>/`。 | 刪除這些目錄（見[解除安裝](#解除安裝)） |
+| 模型呼叫與額度 | 一項任務可能有 router、worker、verifier，失敗後還會升級重跑 worker 與 verifier，因此比直接做更耗 Claude 或 Codex 額度。任務內容與程式碼會像一般使用 Claude Code 或 Codex 一樣送到模型。 | 單次任務說「no ladder」，或關閉 `autoRun` |
+| 使用量保護 | 達到設定門檻（預設 90%）時，用量停止會結束目前 run，並強制停止同機其他已註冊的 model-ladder run。 | 在 band 或 panel 關閉 `usageGuard`；硬性額度上限仍會停止 run |
+| `autoRun` | 預設開啟：頂層任務自動走 ladder。 | 將 `autoRun` 設為 `false`（Claude：`/plugin configure model-ladder`；Codex：`~/.codex/model-ladder.json`），或設定 `MODEL_LADDER_AUTORUN=0` |
+
+## 解除安裝
+
+1. 移除外掛：
+
+   ```sh
+   claude plugin uninstall model-ladder@model-ladder
+   codex plugin remove model-ladder@model-ladder
+   ```
+
+   也可另外執行 `claude plugin marketplace remove model-ladder` 與 `codex plugin marketplace remove model-ladder`。
+2. 移除 PowerShell profile 區塊（Windows、Codex）：先設定 `"hudTakeover": false` 並開啟一次 Codex session，讓 hook 自動移除；或手動編輯 `Documents\PowerShell\profile.ps1` 與 `Documents\WindowsPowerShell\profile.ps1`，刪除從 `# >>> model-ladder codex HUD >>>` 到 `# <<< model-ladder codex HUD <<<` 的整段，其餘內容不要動。
+3. 在每個用過的 repo 中刪除 `.model-ladder/` 與 `.claude/worktrees/`，也可一併刪除 `.git/info/exclude` 中對應的兩行。
+4. 清理殘留的 Git worktree：`git worktree list`，對 model-ladder 的 attempt 執行 `git worktree remove --force <路徑>`，最後執行 `git worktree prune`。
+5. 刪除系統暫存目錄下的 `model-ladder/<repo hash>/`（以及 `model-ladder-update-check.json`）。
+
+## Beta 狀態與已知限制
+
+model-ladder 目前為 **Beta**：行為、設定與檔案結構可能隨版本調整（見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)）。已知限制：
+
+- Windows 上停止 run 時以 `taskkill` 終止整個程序樹；若 Windows 拒絕，run 會回報失敗並保留登記，不會宣稱已停止（[USAGE.md](USAGE.md#usage-protection-details)）。被強制終止的 run 可能沒有 checkpoint 或 `result.json`，需重新執行原任務（[USAGE.md](USAGE.md#usage-protection-details)）。
+- 獨立的 Codex 終端 panel 不顯示 context 用量（[Band](#bandclaude-code)）。
+- Pro 方案須先在 `/config` 啟用 Workflow 再安裝外掛，否則無法使用自動化。
+- Windows 需要原生 `codex.exe`（透過 PATH 或 `CODEX_BINARY`），不支援 `.cmd` 或 `.bat` shim（[USAGE.md](USAGE.md#codex-runner-and-hud)、`scripts/codex-hud.mjs`）。
+- Codex HUD 必須由它啟動 Codex，無法接入執行中的 session，且自動設定 PowerShell 僅限 Windows（[USAGE.md](USAGE.md#codex-runner-and-hud)）。
+- Claude 用量讀數僅 Pro/Max 方案提供；用量未知時保護不會阻擋執行（[USAGE.md](USAGE.md#usage-protection-details)）。
+- macOS 未測（見上表）。
 
 ## 使用方式
 
