@@ -1,6 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { displayWidth, panelTitle } from './panel-title.mjs'
 import { roundSpan } from '../hooks/band/remaining.mjs'
 import { agentExpected, agentSamples, liveExpected } from '../hooks/band/rows.mjs'
@@ -13,14 +11,6 @@ const CODEX_TITLE = (() => {
   catch { return 'model-ladder' }
 })()
 
-export function atomicJson(path, value) {
-  mkdirSync(dirname(path), { recursive: true })
-  const temporary = `${path}.${randomUUID()}.tmp`
-  try {
-    writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' })
-    renameSync(temporary, path)
-  } finally { rmSync(temporary, { force: true }) }
-}
 
 const segments = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const clean = (text) => String(text).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ')

@@ -4,6 +4,10 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [1.2.10] - 2026-11-13
+
+- On Windows, a run no longer stops with EPERM while writing `.model-ladder/live.json` before analysis starts. The file is written to a temp file and renamed over the target, and Windows refuses the rename while another process (a panel reading live.json, an antivirus or an editor watcher) has the target open. The write now retries for about a second on EPERM, EBUSY or EACCES, as lock files already did. The usage forecast and config writes share the same fix.
+
 ## [1.2.9] - 2026-11-12
 
 - New opt-in `"network": true` in `.codex/model-ladder.json` (default `false`) enables network access in the Codex workspace-write sandbox for workers and verifiers. Report tasks then run in `workspace-write` because network has no effect in `read-only`; the read-only edit guard and prompt stay. Prompts drop the "no network" wording, diagnosis no longer treats plain network failures as `stop_environment`, and roles are told to fetch with Python (urllib/requests) instead of curl, which fails in the Windows sandbox with schannel `SEC_E_NO_CREDENTIALS`.

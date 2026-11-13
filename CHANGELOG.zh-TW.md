@@ -4,6 +4,10 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [1.2.10] - 2026-11-13
+
+- 在 Windows 上，run 不再於分析開始前寫入 `.model-ladder/live.json` 時以 EPERM 中止。這個檔案是先寫暫存檔再 rename 蓋過目標，而只要有其他程序開著目標檔（讀 live.json 的面板、防毒或編輯器的檔案監看），Windows 就會拒絕 rename。現在遇到 EPERM、EBUSY 或 EACCES 會重試約一秒，與鎖檔原本的做法相同。用量預測與設定檔的寫入也一併適用。
+
 ## [1.2.9] - 2026-11-12
 
 - 新增選用設定 `"network": true`（`.codex/model-ladder.json`，預設 `false`），讓 Codex worker 與 verifier 的 workspace-write sandbox 可以連網。報告型任務因 `read-only` 下網路無效而改用 `workspace-write`，但仍保留唯讀變更偵測與提示。提示不再寫「no network」，診斷不再把一般網路失敗歸為 `stop_environment`，並要求角色用 Python（urllib/requests）而非 curl 取資料，因為 curl 在 Windows sandbox 會以 schannel `SEC_E_NO_CREDENTIALS` 失敗。
