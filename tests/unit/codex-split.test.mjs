@@ -110,6 +110,43 @@ test('the codex router prompt asks for targeted tests and judges only from the t
   assert.match(prompt, /Numbers in the TASK \(1, 2, 3\.\.\.\) refer only to items within that task/)
 })
 
+test('a read-only route for an apparent Chinese edit asks before any worker and never grants write access', async () => {
+  for (const task of ['把面板標題改成顯示版本，補對應單元測試', '請修改 greeting.mjs，將 Wellcome 修正為 Welcome', '可以修改面板標題嗎？']) {
+    const dir = fixture({ readOnly: true, routerReadOnly: true })
+    const result = await run(dir, { task })
+    assert.equal(result.status, 'NEEDS_INPUT', `${task}: ${JSON.stringify(result.status)}`)
+    assert.match(result.message, /apparent edit as read-only/)
+    const calls = readFileSync(join(dir, '.model-ladder', 'fake-calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+    const route = calls.find((c) => c.phase === 'route')
+    assert.match(route.prompt, /regardless of language/)
+    assert.match(route.prompt, /“修改”/)
+    assert.equal(calls.some((c) => c.phase === 'worker'), false, task)
+    assert.equal(readFileSync(join(dir, 'greeting.mjs'), 'utf8'), 'export default "Wellcome"\n')
+  }
+})
+
+test('Chinese report requests remain read-only', async () => {
+  const dir = fixture({ readOnly: true })
+  const result = await run(dir, { task: '請檢視面板標題並說明目前的命名方式' })
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  const calls = readFileSync(join(dir, '.model-ladder', 'fake-calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+  const worker = calls.find((c) => c.phase === 'worker')
+  assert.equal(result.plan.readOnly, true)
+  assert.equal(worker.sandbox, 'read-only')
+  assert.match(worker.prompt, /READ ONLY\. Make no file changes/)
+})
+
+test('explicit no-edit requests keep a read-only route, even with edit words such as 修改建議', async () => {
+  for (const task of ['不修改任何檔案，列出問題', '不可修改，列出問題', '不能修改，列出問題', '禁止修改，列出問題', '修改建議列出，別動任何檔案', 'do not modify any files; list the problems']) {
+    const dir = fixture({ readOnly: true, routerReadOnly: true })
+    const result = await run(dir, { task })
+    assert.equal(result.status, 'VERIFIED', `${task}: ${JSON.stringify(result)}`)
+    const worker = readFileSync(join(dir, '.model-ladder/fake-calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).find((c) => c.phase === 'worker')
+    assert.equal(result.plan.readOnly, true, task)
+    assert.equal(worker.sandbox, 'read-only', task)
+  }
+})
+
 // Usage-risk confirmation. Comparable history rows carry attributable account samples, so assessUsage in
 // forecast.mjs can judge a window; the current sample comes in through options.usageSnapshot.
 const ACCOUNT = 'acct-test'

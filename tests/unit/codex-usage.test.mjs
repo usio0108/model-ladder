@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, after } from 'node:test'
-import { readCodexUsage } from '../../scripts/codex-usage.mjs'
+import { readCodexContext, readCodexUsage } from '../../scripts/codex-usage.mjs'
 import { usageSnapshot } from '../../scripts/forecast.mjs'
 
 const dirs = []
@@ -19,6 +19,17 @@ const session = (dir, name, lines, time) => {
 }
 const future = Math.floor(Date.now() / 1000) + 3600
 const past = Math.floor(Date.now() / 1000) - 3600
+
+test('context comes only from token counts in the matching session and cwd', () => {
+  const dir = home(), id = 'abcdefab-1234-1234-1234-abcdefabcdef', cwd = join(dir, 'repo')
+  const meta = JSON.stringify({ type: 'session_meta', payload: { id, cwd } })
+  const count = (tokens, window) => JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: tokens }, model_context_window: window } } })
+  session(dir, `rollout-${id}.jsonl`, [meta, count(20, 100), JSON.stringify({ type: 'response_item', payload: { text: 'private conversation' } }), count(70, 100)], 1000)
+  assert.deepEqual(readCodexContext(cwd, id, dir), { tokens: 70, window: 100 })
+  assert.equal(readCodexContext(join(dir, 'other'), id, dir), null)
+  assert.equal(readCodexContext(cwd, '11111111-1111-1111-1111-111111111111', dir), null)
+  assert.equal(readCodexContext(cwd, '../../invalid', dir), null)
+})
 
 test('reads the last rate_limits of the newest session and takes the max live window', () => {
   const dir = home()

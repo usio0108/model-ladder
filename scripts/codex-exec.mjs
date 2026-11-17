@@ -34,6 +34,10 @@ export function validate(value, schema, path = 'output') {
 
 // Request this extra decision only when the caller supplies actual context data.
 SCHEMAS.directRoute = object({ ...SCHEMAS.route.properties, small: { type: 'boolean' }, smallReason: string })
+// Asked only when the user gave no acceptance: the router proposes it, and the runner drops items a worker cannot meet.
+SCHEMAS.routeWithAcceptance = object({ ...SCHEMAS.route.properties, acceptance: strings })
+SCHEMAS.directRouteWithAcceptance = object({ ...SCHEMAS.directRoute.properties, acceptance: strings })
+SCHEMAS.workerWithSkills = object({ ...SCHEMAS.worker.properties, skills: { type: 'array', items: object({ name: string, applies: { type: 'boolean' }, available: { type: 'boolean' }, used: { type: 'boolean' }, note: string }) } })
 
 export class EnvironmentError extends Error {}
 const SETUP_FAILURE = /not authenticated|unauthorized|authentication|login required|log in|invalid.*api.?key|401\b|403\b|model.{0,80}(not found|not available|not supported|unsupported|does not exist)|(?:unsupported|not supported).{0,80}(model|reasoning|effort)|(?:reasoning|effort).{0,80}(?:unsupported|not supported)|sandbox|permission denied|access denied/i
@@ -56,7 +60,7 @@ function kill(child) {
   }
 }
 
-export function processRun(command, args, { cwd, input = '', timeoutMs = 600000, signal, shell = false, env: extraEnv = {} } = {}) {
+export function processRun(command, args, { cwd, input = '', timeoutMs = 600000, signal, shell = false, env: extraEnv = {}, onStdout } = {}) {
   return new Promise((resolve, reject) => {
     let stdout = '', stderr = '', stopped = null
     const failure = (message, code) => Object.assign(new EnvironmentError(message), { code, cwd, stdout, stderr })
@@ -70,7 +74,7 @@ export function processRun(command, args, { cwd, input = '', timeoutMs = 600000,
     // Idle limit, not a deadline: any output proves the child is still working and restarts the clock.
     const timer = setTimeout(() => stop('TIMEOUT'), timeoutMs)
     const tail = (text, limit) => text.slice(-limit).replace(/^[\uDC00-\uDFFF]/, '')
-    child.stdout.setEncoding('utf8').on('data', (data) => { timer.refresh(); stdout = tail(stdout + data, 131072) })
+    child.stdout.setEncoding('utf8').on('data', (data) => { timer.refresh(); stdout = tail(stdout + data, 131072); onStdout?.(data) })
     child.stderr.setEncoding('utf8').on('data', (data) => { timer.refresh(); stderr = tail(stderr + data, 16384) })
     child.stdin.on('error', () => {})
     child.on('error', (error) => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(failure(error.message, error.code)) })
@@ -84,16 +88,25 @@ export function processRun(command, args, { cwd, input = '', timeoutMs = 600000,
   })
 }
 
-export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs, signal, executable, schema = SCHEMAS[phase] }) {
+// env reaches this one Codex child and, through shell_environment_policy.set, every command it runs in its sandbox,
+// whatever the person's inherit policy. It never changes the runner's own environment.
+export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs, signal, executable, onActivity, schema = SCHEMAS[phase], env = {}, network = false }) {
   const schemaPath = join(run, `${phase}.schema.json`)
   const outputPath = join(run, `${phase}.output.json`)
   writeFileSync(schemaPath, JSON.stringify(schema))
   rmSync(outputPath, { force: true })
-  const args = [...(executable?.prefixArgs ?? []), 'exec', '-m', cell.model, '-c', `model_reasoning_effort=${JSON.stringify(cell.effort)}`,
+  const shellEnv = Object.entries(env).flatMap(([key, value]) => ['-c', `shell_environment_policy.set.${key}=${JSON.stringify(value)}`])
+  const args = [...(executable?.prefixArgs ?? []), 'exec', '-m', cell.model, '-c', `model_reasoning_effort=${JSON.stringify(cell.effort)}`, ...shellEnv, ...(network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
     '-C', cwd, '--json', '--output-schema', schemaPath, '-o', outputPath, '--sandbox', sandbox, '-']
-  let result, events = []
+  let result, events = [], pending = ''
   try {
-    result = await processRun(executable?.command ?? process.env.CODEX_BINARY ?? 'codex', args, { cwd, input: `This is one internal model-ladder role. Do not invoke model-ladder skills, workflows or runners recursively; perform only the assigned role.\n\n${prompt}`, timeoutMs, signal, env: { MODEL_LADDER_ROLE: phase, MODEL_LADDER_AUTORUN: '0', MODEL_LADDER_BAND: '0' } })
+    result = await processRun(executable?.command ?? process.env.CODEX_BINARY ?? 'codex', args, { cwd, input: `This is one internal model-ladder role. Do not invoke model-ladder skills, workflows or runners recursively; perform only the assigned role.\n\n${prompt}`, timeoutMs, signal, env: { ...env, MODEL_LADDER_ROLE: phase, MODEL_LADDER_AUTORUN: '0', MODEL_LADDER_BAND: '0' }, onStdout: (data) => {
+      const lines = (pending + data).split('\n'); pending = lines.pop()
+      for (const line of lines) try {
+        const event = JSON.parse(line)
+        if (event.type.startsWith('item.') && event.item?.type === 'command_execution' && typeof event.item.command === 'string') onActivity?.(`Command: ${event.item.command}`)
+      } catch {}
+    } })
   } catch (error) {
     result = error
     Object.assign(error, { phase, cwd })

@@ -72,6 +72,8 @@ Project overrides remain effective, and guard changes do not invalidate Codex re
 `legalMoves` and `pickMove` come from the generated shared rules, with drift checked by tests.
 A dead worker or invalid output fails that step; failed diagnosis uses the default legal move.
 Authentication, model-access, and sandbox errors stop Codex rather than triggering escalation.
+Codex worker and verifier sandboxes have no network and a worktree without `.venv` or `node_modules`. A uv project borrows the main checkout's `.venv` read-only through role environment variables (`sandboxEnv` in `scripts/codex-run.mjs`); a uv verification without that `.venv`, or a failed npm-style check without `node_modules`, stops once instead of escalating.
+The verify command and the verifier run in a separate `attempt-<n>-verify` worktree built from the worker snapshot, so ignored files the worker left behind (different Windows sandbox account) never reach them; post-verification checks compare that worktree to the snapshot, and the worker worktree stays the retained one.
 
 ## Isolation and concurrent runs
 
@@ -103,15 +105,15 @@ Tests remain protected unless the task requests test changes; explicit `protecte
 Verification may create build artifacts, but existing tracked inputs remain checked.
 The hook is best effort and fails open if Node is unavailable; final diff checks still enforce protection.
 
-## DIRECT, splitting, and recovery
+## DIRECT and recovery
 
 | Feature | Rule |
 |---|---|
 | DIRECT | Small task plus measured context at `direct_threshold`; never verified by the routing decision alone. |
 | Claude DIRECT | Main session edits, then a separate verifier checks, with at most three correction rounds. |
 | Codex DIRECT | Caller edits an isolated draft, then `directRun` reclaims scope, checks the baseline, verifies, and applies. |
-| Forecast | Duration ranges, observed phase timings and per-window headroom; elapsed/expected in the panel; one usage-risk confirmation before the worker when a window is insufficient or at risk; no split confirmation. |
-| Force ladder | `forceLadder` disables DIRECT and split suggestions. |
+| Forecast | Duration ranges, observed phase timings and per-window headroom; elapsed/expected in the panel; one usage-risk confirmation before the worker when a window is insufficient or at risk. |
+| Force ladder | `forceLadder` disables DIRECT. |
 | Timeout | Idle time without output, configured by `timeoutMs`. |
 | Codex resume | Validate checkout, task, acceptance, and configuration before continuing a draft in a fresh worktree. |
 

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, after } from 'node:test'
-import { runLadder, loadConfig, discoverVerify, readInput } from '../../scripts/codex-run.mjs'
+import { runLadder, loadConfig, discoverVerify, readInput, resolveModel } from '../../scripts/codex-run.mjs'
 import { SCHEMAS, validate, environmentFailure, usageLimitFailure } from '../../scripts/codex-exec.mjs'
 import { artifactDir, pruneRuns } from '../../scripts/common.mjs'
 import { activeRuns, registerRun, unregisterRun } from '../../scripts/usage-guard.mjs'
@@ -50,6 +50,39 @@ const run = (cwd, input = {}, extra = {}) => runLadder({ task: 'Fix greeting typ
 const calls = (dir) => read(dir, '.model-ladder/fake-calls.jsonl').trim().split('\n').map(JSON.parse)
 const cleaned = (dir) => { assert.equal(existsSync(join(dir, '.model-ladder/run.json')), false); assert.deepEqual(existsSync(join(dir, '.model-ladder/runs')) ? readdirSync(join(dir, '.model-ladder/runs')).filter((f) => f.endsWith('.json')) : [], []); assert.equal(git(dir, 'worktree', 'list', '--porcelain').match(/^worktree /gm).length, 1) }
 
+test('resolveModel maps family names to the highest cached version, with fallbacks and passthrough', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ladder-models-'))
+  dirs.push(home)
+  const slugs = ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-reserve', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'codex-auto-review']
+  writeFileSync(join(home, 'models_cache.json'), JSON.stringify({ models: slugs.map((slug) => ({ slug })) }))
+  assert.equal(resolveModel('terra', home), 'gpt-6.1-terra')
+  assert.equal(resolveModel('sol', home), 'gpt-6.1-sol')
+  assert.equal(resolveModel('luna', home), 'gpt-6-luna')
+  writeFileSync(join(home, 'models_cache.json'), JSON.stringify({ models: [{ slug: 'gpt-5.6-terra' }, { slug: 'gpt-6-terra' }, { slug: 'gpt-10-terra' }, { slug: 'gpt-9.9-terra' }] }))
+  assert.equal(resolveModel('terra', home), 'gpt-10-terra')
+  writeFileSync(join(home, 'models_cache.json'), JSON.stringify({ models: [{ slug: 'gpt-5.6-sol' }] }))
+  assert.equal(resolveModel('terra', home), 'gpt-6.1-terra')
+  writeFileSync(join(home, 'models_cache.json'), 'not json')
+  assert.equal(resolveModel('luna', home), 'gpt-6-luna')
+  assert.equal(resolveModel('sol', join(home, 'missing')), 'gpt-6.1-sol')
+  assert.equal(resolveModel('terra', join(home, 'missing')), 'gpt-6.1-terra')
+  assert.equal(resolveModel('gpt-5.6-terra', home), 'gpt-5.6-terra')
+  assert.equal(resolveModel('astra', home), 'astra')
+})
+
+test('loadConfig defaults use family names resolved from the models cache', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ladder-models-'))
+  dirs.push(home)
+  writeFileSync(join(home, 'models_cache.json'), JSON.stringify({ models: [{ slug: 'gpt-5.6-terra' }, { slug: 'gpt-6.1-terra' }] }))
+  const prior = process.env.CODEX_HOME
+  process.env.CODEX_HOME = home
+  try {
+    const config = loadConfig(mkdtempSync(join(tmpdir(), 'ladder-cfg-')))
+    assert.equal(config.router.model, 'gpt-6.1-terra')
+    assert.deepEqual(config.tiers.map((t) => t.model), ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol'])
+  } finally { process.env.CODEX_HOME = prior }
+})
+
 test('same package identity/version and generated rules do not drift', () => {
   const root = fileURLToPath(new URL('../../', import.meta.url))
   const cc = JSON.parse(read(root, '.claude-plugin/plugin.json'))
@@ -86,6 +119,23 @@ test('Codex worker prompt carries the editing rules', async () => {
   assert.match(prompt, /`uv run`/)
   assert.match(prompt, /\.venv, uv\.lock/)
   assert.match(prompt, /git status --porcelain --untracked-files=all/)
+})
+test('matching session token count enables the DIRECT route', async () => {
+  const dir = fixture()
+  const previous = process.env.CODEX_THREAD_ID
+  const id = 'abcdefab-1234-1234-1234-abcdefabcdef'
+  const file = join(NO_USAGE, 'sessions', `rollout-${id}.jsonl`)
+  try {
+    process.env.CODEX_THREAD_ID = id
+    mkdirSync(join(NO_USAGE, 'sessions'), { recursive: true })
+    writeFileSync(file, [JSON.stringify({ type: 'session_meta', payload: { id, cwd: dir } }), JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 70 }, model_context_window: 100 } } })].join('\n'))
+    const result = await run(dir)
+    assert.equal(result.status, 'DIRECT', JSON.stringify(result))
+    assert.deepEqual(calls(dir).map((call) => call.phase), ['route'])
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_THREAD_ID; else process.env.CODEX_THREAD_ID = previous
+    rmSync(file, { force: true })
+  }
 })
 test('historical phase medians take precedence over first-run router estimates', async () => {
   const dir = fixture({ workerMinutes: 8, verifyMinutes: 6 })
@@ -223,22 +273,55 @@ test('without existing verification the user must supply acceptance', async () =
   assert.ok(calls(dir).some((c) => c.phase === 'verify'))
   cleaned(dir)
 })
+test('router acceptance that needs a commit or a clean tree is dropped; user acceptance is untouched', async () => {
+  const routerAcceptance = ['Greeting is Welcome', 'Changes are committed', 'Working tree is clean after commit', 'No commit is made']
+  const dir = fixture({ routerAcceptance })
+  const result = await run(dir)
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  assert.deepEqual(result.plan.acceptance, ['Greeting is Welcome', 'No commit is made'])
+  assert.match(calls(dir)[0].prompt, /Never put commit, push, release, tag or clean-working-tree conditions in acceptance/)
+  assert.ok(calls(dir).find((c) => c.phase === 'worker').prompt.includes('No commit is made'))
+  assert.ok(!calls(dir).find((c) => c.phase === 'worker').prompt.includes('Changes are committed'))
+  cleaned(dir)
+  const own = fixture({ routerAcceptance })
+  const user = ['Changes are committed']
+  const kept = await run(own, { acceptance: user })
+  assert.deepEqual(kept.plan.acceptance, user)
+  assert.match(calls(own)[0].prompt, /The user already supplied acceptance/)
+  cleaned(own)
+})
 test('vague task asks its clarifying question', async () => {
   const dir = fixture({ question: 'Which greeting?' })
   assert.equal((await run(dir)).message, 'Which greeting?')
+  cleaned(dir)
+})
+test('a read-only router result for an apparent direct edit needs confirmation before any worker runs', async () => {
+  const dir = fixture({ routerReadOnly: true })
+  const result = await run(dir, { task: '把面板標題改成顯示版本，補對應單元測試' })
+  assert.equal(result.status, 'NEEDS_INPUT', JSON.stringify(result))
+  assert.match(result.message, /read-only/)
+  assert.deepEqual(calls(dir).map((call) => call.phase), ['route'])
   cleaned(dir)
 })
 test('read-only report does not apply or stage user edits', async () => {
   const dir = fixture({ readOnly: true })
   write(dir, 'notes.txt', 'user note\n')
   const before = git(dir, 'write-tree')
-  const result = await run(dir, { allowDirty: true })
+  const result = await run(dir, { task: 'Explain where the greeting comes from.', allowDirty: true })
   assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
   assert.match(result.summary, /Greeting comes from/)
   assert.equal(result.outcome.applied, false)
   assert.equal(git(dir, 'write-tree'), before)
   assert.equal(read(dir, 'notes.txt'), 'user note\n')
   assert.ok(calls(dir).find((c) => c.phase === 'worker').sandbox === 'read-only')
+  cleaned(dir)
+})
+test('an explicit no-edit request keeps the ordinary read-only route', async () => {
+  const dir = fixture({ readOnly: true })
+  const result = await run(dir, { task: 'Explain where the greeting comes from. Do not make any edits.' })
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  assert.equal(result.outcome.applied, false)
+  assert.equal(calls(dir).find((call) => call.phase === 'worker').sandbox, 'read-only')
   cleaned(dir)
 })
 test('patch conflict retains the verified worktree and patch without overwriting concurrent work', async () => {
@@ -431,6 +514,8 @@ test('usageGuard stops at the threshold with a handoff and releases the marker',
     const result = await run(dir)
     assert.equal(result.status, 'STOPPED', JSON.stringify(result))
     assert.equal(result.errorCode, 'USAGE_LIMIT')
+    assert.equal(result.needsAiHandoff, true)
+    assert.equal(result.handoffSkill, 'handoff')
     assert.match(result.message, /95%.*90%/)
     assert.match(readFileSync(result.handoffPath, 'utf8'), /Fix greeting typo/)
     assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
@@ -738,7 +823,7 @@ test('skill and acceptance verification can build while reports remain read-only
   cleaned(dir)
   const report = fixture({ readOnly: true }, { verify: null })
   seed(report, { '.agents/skills/verify/SKILL.md': 'Review report' })
-  assert.equal((await run(report)).status, 'VERIFIED')
+  assert.equal((await run(report, { task: 'Review the greeting implementation.' })).status, 'VERIFIED')
   assert.equal(calls(report).find((c) => c.phase === 'verify').sandbox, 'read-only')
   cleaned(report)
   const acceptance = fixture({ verifyFiles: { 'dist/check.mjs': 'build artifact' } }, { verify: null })
@@ -818,14 +903,131 @@ test('role skill instructions reach the correct role intact and appear in live s
   assert.ok(!log.find((c) => c.phase === 'verify').prompt.includes(worker))
   assert.doesNotMatch(log.find((c) => c.phase === 'route').prompt, /SKILL INSTRUCTIONS/)
   assert.match(log.find((c) => c.phase === 'worker').prompt, /Evaluate each condition first, then select only the applicable relevant skills/)
+  assert.match(log.find((c) => c.phase === 'worker').prompt, /Every named capability whose condition applies is mandatory.*used is true only if you yourself read the selected SKILL.md in this attempt.*Hook-injected, pre-loaded or already-active context.*does NOT count/)
   assert.equal(JSON.parse(read(dir, '.model-ladder/live.json')).skills.worker, worker)
+  cleaned(dir)
+})
+
+test('available required skills skipped by a worker fail before verification', async () => {
+  const skills = [{ name: 'example', applies: true, available: true, used: false, note: 'skipped' }]
+  const dir = fixture({ skills }, { worker_skills: 'use example', maxAttempts: 1 })
+  const result = await run(dir)
+  assert.equal(result.status, 'FAILED')
+  assert.match(result.attempts[0].reason, /worker skipped required skills: example/)
+  assert.deepEqual(result.attempts[0].skills, skills)
+  const row = JSON.parse(read(dir, '.model-ladder/history.jsonl').trim().split('\n').at(-1))
+  assert.deepEqual(row.attempts[0].skills, skills.map(({ name, applies, available, used, note }) => ({ name, applies, available, used, note })))
+  assert.ok(!calls(dir).some((call) => call.phase === 'verify'))
+  assert.match(JSON.stringify(JSON.parse(read(dir, '.model-ladder/live.json'))), /example/)
+  cleaned(dir)
+})
+
+test('worker command events appear in live progress', async () => {
+  const dir = fixture({ activity: 'node --test example' })
+  const frames = []
+  const result = await run(dir, {}, { onProgress: (frame) => frames.push(frame) })
+  assert.equal(result.status, 'VERIFIED')
+  assert.equal(JSON.parse(read(dir, '.model-ladder/live.json')).agents.find((a) => a.phase === 'worker').activity, 'Command: node --test example')
   cleaned(dir)
 })
 
 test('report-only tasks without tests use independent review without asking for criteria', async () => {
   const dir = fixture({ readOnly: true }, { verify: null })
-  const result = await run(dir)
+  const result = await run(dir, { task: 'Summarize the greeting implementation.' })
   assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
   assert.equal(result.outcome.applied, false)
+  cleaned(dir)
+})
+
+test('network defaults to false and must be boolean', () => {
+  assert.equal(loadConfig(fixture()).network, false)
+  assert.equal(loadConfig(fixture({}, { network: true })).network, true)
+  assert.throws(() => loadConfig(fixture({}, { network: 'yes' })), /network must be boolean/)
+})
+test('network off: no network_access flag, report roles stay read-only, prompts keep the no-network limits', async () => {
+  const dir = fixture()
+  assert.equal((await run(dir)).status, 'VERIFIED')
+  for (const call of calls(dir)) assert.equal(call.networkAccess, false, call.phase)
+  const worker = calls(dir).find((c) => c.phase === 'worker')
+  assert.match(worker.prompt, /has no network/)
+  assert.doesNotMatch(worker.prompt, /urllib/)
+  cleaned(dir)
+  const report = fixture({ readOnly: true })
+  assert.equal((await run(report, { task: 'Explain where the greeting comes from.' })).status, 'VERIFIED')
+  for (const phase of ['worker', 'verify']) assert.equal(calls(report).find((c) => c.phase === phase).sandbox, 'read-only')
+  cleaned(report)
+})
+test('network on: worker and verifier get network_access, other roles do not, and prompts drop the no-network wording', async () => {
+  const dir = fixture({}, { network: true })
+  assert.equal((await run(dir)).status, 'VERIFIED')
+  const all = calls(dir)
+  for (const call of all) assert.equal(call.networkAccess, call.phase === 'worker' || call.phase === 'verify', call.phase)
+  for (const call of all.filter((c) => c.phase === 'worker' || c.phase === 'verify')) {
+    assert.doesNotMatch(call.prompt, /no network|any other download/i, call.phase)
+    assert.match(call.prompt, /only inside this worktree/, call.phase)
+    assert.match(call.prompt, /Python \(urllib or requests\), not curl/, call.phase)
+    assert.match(call.prompt, /SEC_E_NO_CREDENTIALS/, call.phase)
+  }
+  cleaned(dir)
+})
+test('network on: report tasks use workspace-write but still forbid and detect edits', async () => {
+  const report = fixture({ readOnly: true }, { network: true })
+  assert.equal((await run(report, { task: 'Explain where the greeting comes from.' })).status, 'VERIFIED')
+  for (const phase of ['worker', 'verify']) {
+    const call = calls(report).find((c) => c.phase === phase)
+    assert.equal(call.sandbox, 'workspace-write', phase)
+    assert.equal(call.networkAccess, true, phase)
+  }
+  assert.match(calls(report).find((c) => c.phase === 'worker').prompt, /READ ONLY\. Make no file changes/)
+  assert.equal(calls(report).find((c) => c.phase === 'route').sandbox, 'read-only')
+  cleaned(report)
+  // the router says read-only but the worker edits a file: the change-detection guard still fails the attempt
+  const edits = fixture({ routerReadOnly: true }, { network: true, maxAttempts: 1 })
+  const result = await run(edits, { task: 'Explain where the greeting comes from.' })
+  assert.notEqual(result.status, 'VERIFIED', JSON.stringify(result))
+  assert.match(JSON.stringify(result), /Read-only attempt changed files/)
+})
+test('network on: the diagnose prompt no longer calls network failures environment stops', async () => {
+  const off = fixture({ alwaysFail: true }, { maxAttempts: 2 })
+  await run(off)
+  const offPrompt = calls(off).find((c) => c.phase === 'diagnose').prompt
+  assert.match(offPrompt, /no network/)
+  assert.match(offPrompt, /failed downloads/)
+  const on = fixture({ alwaysFail: true }, { network: true, maxAttempts: 2 })
+  await run(on)
+  const onPrompt = calls(on).find((c) => c.phase === 'diagnose').prompt
+  assert.doesNotMatch(onPrompt, /no network|failed downloads/)
+  assert.match(onPrompt, /Plain network failures .* are not stop_environment/)
+  assert.match(onPrompt, /only inside the worktree/)
+})
+
+test('verify command and verifier run in a fresh worktree without the worker\'s ignored files', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'ml-verify-wt-'))
+  dirs.push(scratch)
+  const probe = join(scratch, 'probe.mjs')
+  const seen = join(scratch, 'seen.json')
+  writeFileSync(probe, `import { existsSync, appendFileSync } from 'node:fs'\nconst here = process.cwd()\nconst out = JSON.stringify({ cwd: here, cache: existsSync('.pytest_cache/x') })\nif (process.argv[2]) appendFileSync(process.argv[2], out + String.fromCharCode(10))\nconsole.log(out)\n`)
+  const slash = (p) => p.split(String.fromCharCode(92)).join('/')
+  const q = (p) => JSON.stringify(slash(p))
+  const dir = fixture({ workerFiles: { '.pytest_cache/x': 'secret' }, commands: { verify: probe } },
+    { verify: `node ${q(probe)} ${q(seen)} && node --test tests/check.test.mjs` })
+  write(dir, '.gitignore', '.model-ladder/\n.pytest_cache/\n')
+  git(dir, 'add', '-A')
+  git(dir, 'commit', '-qm', 'ignore pytest cache')
+  const result = await run(dir)
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  const worker = calls(dir).find((c) => c.phase === 'worker')
+  const verifier = calls(dir).find((c) => c.phase === 'verify')
+  assert.notEqual(verifier.cwd, worker.cwd)
+  assert.match(slash(verifier.cwd), /attempt-1-verify$/)
+  assert.equal(existsSync(join(verifier.cwd, '.pytest_cache/x')), false)
+  assert.deepEqual(JSON.parse(verifier.command.output.trim()).cache, false)
+  const [viaVerify] = readFileSync(seen, 'utf8').trim().split('\n').map(JSON.parse)
+  assert.equal(viaVerify.cache, false)
+  assert.notEqual(slash(viaVerify.cwd).toLowerCase(), slash(worker.cwd).toLowerCase())
+  assert.match(slash(viaVerify.cwd), /attempt-1-verify$/)
+  assert.deepEqual(result.outcome.files, ['greeting.mjs'])
+  assert.match(read(dir, 'greeting.mjs'), /Welcome/)
+  assert.equal(existsSync(join(dir, '.pytest_cache')), false)
   cleaned(dir)
 })

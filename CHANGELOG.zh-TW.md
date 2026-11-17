@@ -4,22 +4,65 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [1.2.11] - 2026-11-17
+
+Codex 在面板、用量交接、skills 與安全檢查上補齊到與 Claude Code 端一致。
+
+- 新增 Claude Code 與 Codex 共用的 `/model-ladder:uninstall` skill，由 `scripts/uninstall.mjs` 執行，取代原本五個手動解除安裝步驟。它會移除這個 repository 的 `.model-ladder/` 與 `.claude/worktrees/`、`.git/info/exclude` 中對應的兩行、model-ladder 建立的 Git worktree（只限 `.claude/worktrees/` 或 run 暫存目錄底下的，之後執行 `git worktree prune`）、這個 repository 的暫存目錄、兩個 PowerShell profile 中有標記的 `function codex` 區塊（保留編碼、換行與檔案其餘內容），以及 `model-ladder-update-check.json`。skill 會先顯示 `--dry-run` 清單，你確認後才執行，最後列出移除外掛的指令。重複執行會回報全部已不存在。repository 中有 run 正在執行時會拒絕，除非加上 `--force`。腳本隨外掛安裝，所以請在移除外掛前，於每個用過的 repository 中各執行一次。
+- README：解除安裝改為先執行 skill、再移除外掛，手動步驟保留作為備用。安裝說明新增：若 `codex features list` 顯示 `hooks` 為關閉，需在 `~/.codex/config.toml` 加入 `[features]` `hooks = true`，否則 Codex 的 SessionStart hook（autorun、面板與 HUD 設定）不會執行。
+- 在 Windows 上，run 不再於分析開始前寫入 `.model-ladder/live.json` 時以 EPERM 中止。這個檔案是先寫暫存檔再 rename 蓋過目標，而只要有其他程序開著目標檔（讀 live.json 的面板、防毒或編輯器的檔案監看），Windows 就會拒絕 rename。現在遇到 EPERM、EBUSY 或 EACCES 會重試約一秒，與鎖檔原本的做法相同。用量預測與設定檔的寫入也一併適用。
+- 新增選用設定 `"network": true`（`.codex/model-ladder.json`，預設 `false`），讓 Codex worker 與 verifier 的 workspace-write sandbox 可以連網。報告型任務因 `read-only` 下網路無效而改用 `workspace-write`，但仍保留唯讀變更偵測與提示。提示不再寫「no network」，診斷不再把一般網路失敗歸為 `stop_environment`，並要求角色用 Python（urllib/requests）而非 curl 取資料，因為 curl 在 Windows sandbox 會以 schannel `SEC_E_NO_CREDENTIALS` 失敗。
+- Codex 的 worker、verify 指令與 verifier 現在對所有專案都會拿到指向 attempt worktree 內 `.ml-tmp`（已 gitignore）的 `TEMP`、`TMP`、`TMPDIR`。過去 Windows 上的 sandbox 無法寫入系統暫存目錄，`tempfile.gettempdir()` 會丟出 "No usable temporary directory found"，pytest `tmp_path` 也會失敗。runner 自己的環境不變。
+- Codex 現在改在以 worker 快照建立的全新 `attempt-<n>-verify` worktree 中執行 verify 指令與 verifier，不再使用 worker 自己的 worktree。Windows 上 worker 與 verifier 是不同的 sandbox 帳號，worker 建立的 gitignore 檔案（`.pytest_cache`、`.pytest_tmp`、`.ml-tmp`、`.uv-cache`）它們讀不到，導致 tmp_path 測試以 PermissionError 失敗（「147 passed, 9 errors」）。失敗或衝突時保留的仍是 worker 的 worktree。診斷提示與 sandbox 說明也新增：對先前角色建立的檔案出現 PermissionError 是 sandbox 身分問題，`uv sync` 無法修復。
+- Codex 的 worker 與 verifier 現在能在 sandbox 中跑 uv 專案的測試；該 sandbox 沒有網路，worktree 也沒有 `.venv`。過去 `uv run pytest` 會因 uv 快取存取被拒或無網路而失敗，diagnose 回 `stop_environment`，run 就此停止。現在 worker、verify 指令與 verifier 會拿到指向主 checkout `.venv` 的 `UV_PROJECT_ENVIRONMENT`，加上 `UV_NO_SYNC`、`UV_OFFLINE`、`PYTHONDONTWRITEBYTECODE` 與位於 worktree 內的 `UV_CACHE_DIR`，並透過 `shell_environment_policy.set` 傳給 Codex。主 `.venv` 不會被寫入，worktree 不會出現 `.venv`，也不改任何全域變數。
+- uv 驗證找不到主 `.venv` 時，Codex run 會在 routing 前停止，回報 `errorCode: "UV_SYNC_REQUIRED"` 與「Run uv sync in the main checkout first」（需要先在主 checkout 跑 uv sync），不會重試。
+- Node 專案的 worktree 沒有 `node_modules` 而 npm 類 verify 指令失敗時，現在以「Frontend checks not run」（前端檢查未執行）停止，絕不當作通過或重試。不建立 `node_modules` junction。
+- worker 與 verifier 的 prompt 會說明 sandbox 限制；diagnose 回 `stop_environment` 時，結尾附上可照做的提示（在主 checkout 跑 `uv sync`，或設定 `verify`）。Claude runtime 不變。
+- router 不再把 commit、push、tag、release 或「工作區乾淨」寫進驗收條件，因為 worker 在隔離 worktree 中工作、不得 commit，根本無法達成，任務因此永遠過不了。若 router 仍寫出這類條件，`dropUnachievableAcceptance` 也會濾掉。Claude 與 Codex 都適用。Codex router 在你沒給條件時，現在可以自行提出驗收條件。
+- Claude 的確認步驟現在會在選項預覽中逐條列出驗收條件，並使用你的語言，讓你在核准前就看到這次 run 會依什麼判定。Codex 也同樣要求用你的語言逐條列出。
+- Codex runner 的 `--help` 現在列出完整的 `.model-ladder` 檔案，讓你知道它會在你的 repo 寫入什麼。
+- 文件：README 新增「需求與相容性」、「副作用與資料」、「解除安裝」、「Beta 與已知限制」；USAGE 新增首次執行問題的疑難排解表；移除過時的 split 說明；zh-TW 文件同步更新。
+- 新增 issue 與 PR 範本、CONTRIBUTING、SECURITY。`package.json` 補上 `engines` 與 `npm test` 指令，兩個 plugin manifest 補上 `homepage`、`repository`、`license` 與 `keywords`，CI 也加入 macOS。
+- 在 Codex 可以直接用說的改用量守門，例如「把 model-ladder 的 threshold 改成 80」或「關掉 usage guard」。Codex skill 會執行新的 `watch.mjs --set`：把 `--threshold` 與 `--guard` 存到你自己的 `~/.codex/model-ladder.json` 後直接結束，不開 watch，並回報目前生效的設定；若專案設定檔覆蓋了該值也會註明。
+- 隔離 worktree 被拒不再結束這次 Workflow 呼叫。1.2.5 被拒時會回傳 boundary，worker 要到下一次呼叫才會自己建 worktree；主 session 若在那個 boundary 收尾，就永遠跑不到那一步，所以在 Claude Code 拒絕每個 worktree 的 session 上 run 仍會失敗。被拒的 agent 根本沒有啟動，現在不寫進 journal、也不算作這次呼叫的 agent，自建 worktree 的重跑會在同一次呼叫內接著進行。
+- 兩個 runtime 的 worker skill 指示現在一律為必用，並嚴格檢查。只有 worker 本身在這次 attempt 實際呼叫該能力時（Skill tool 呼叫或直接呼叫工具；Codex 為實際讀取並照做該 skill 的 SKILL.md），`used` 才為 true。hook 注入的規則、原本就開著的模式、只是照著精神做，都算 `used: false`，attempt 會失敗。先前 worker 可以因為 SubagentStart hook 注入了 ponytail 的規則，就回報已使用 ponytail。
+- 兩個 runtime 都會把每次 attempt 的 skill 回報（name、applies、available、used、note）寫入 `.model-ladder/history.jsonl`，事後可以查 skill 是否真的有執行。
+- Claude Code 拒絕 worker 的隔離 worktree 時，worker 現在會自己用 `git worktree add --detach` 在 `.claude/worktrees/` 下建立 worktree，並只在其中工作；該次及同一 run 之後的每次 attempt 都如此。部分 Windows session 中 Claude Code 會把 `c:\` 與 `C:/` 當成不同路徑而拒絕每個 worktree，重試隔離沒有用。受保護路徑 hook 現在依檔案所在的 worktree 判斷路徑，所以 worker 從主 checkout 起步時仍然有效。worker 錯誤訊息保留 600 字（原為 200 字），被拒時能看到兩個路徑。
+- Codex HUD 也接受 Alt+H 觸發交接。使用注音等輸入法時，即使在輸入法的英文模式，Ctrl+] 也會變成 `】`，HUD 無法辨識；Alt+H 送出的是 `ESC h`（或 win32-input-mode 的 Alt+H），不會轉給 Codex。Ctrl+Alt+H（AltGr）仍是一般字元。標題列提示改為 `^]/Alt+H handoff`。
+- 自己的 repo 沒有 run 時，Codex HUD 現在會顯示 Codex 在其他 repo 啟動的 run（例如暫存目錄下的 scratch repo）。HUD 讀取全機共用的執行中 runner 登記，並在 task 前加上該 repo 的資料夾名稱。先前整個 run 期間 HUD 都顯示 `idle`。
+- Codex HUD 現在會自己找出 session。互動式 Codex 是在共用的 `codex app-server` daemon 中，以 daemon 的環境執行 SessionStart hook，所以 HUD 的 token 傳不到 hook，也就不會寫出 marker，HUD 因此一直顯示「Session hook not detected」，也沒有 context 用量。現在 HUD 會改找 `$CODEX_HOME/sessions` 下同一資料夾、在 HUD 啟動之後才開始的最新 `codex-tui` rollout。HUD 最多每 3 秒重新掃描一次，`/new` 或 `/resume` 之後會切換到較新的 rollout。HUD 會讀完整的第一行，實際 rollout 的第一行約 19 KB。
+- SessionStart hook 只在 `MODEL_LADDER_HUD_TOKEN` 是合法 UUID 時才輸出「model-ladder HUD is already running」，所以從 daemon 繼承到殘留 `MODEL_LADDER_HUD=1` 的 session 不會再收到這段文字。
+- HUD 的 session 警告和 handoff 通知改為接在第一列尾端，不再取代第二列，因此 `model/effort  act./est.  task` 標題列和 agent 列都會保留。終端機較窄時，先省略 context，再省略按鍵提示。警告改為 `⚠ session ?`，沒有 context 時顯示 `ctx ?`。
+- Codex 的 router、verifier 和 tiers 預設改用家族名稱 `terra`、`luna` 和 `sol`，載入時解析為 `$CODEX_HOME/models_cache.json` 中最高的版本（例如 `terra` → `gpt-6.1-terra`）。cache 中沒有符合的模型時，退回 `gpt-6-luna`、`gpt-6.1-terra` 和 `gpt-6.1-sol`。完整模型名稱則照原樣使用。
+- **Claude band 背景列**不再在工作仍在執行時一直被藏起來。回覆若表示在等背景結果，現在會重新顯示所有仍在執行的工作，不只限於當輪的問題。所以先前因回覆被誤判為最終答案而藏起來的工作會重新出現，例如背景測試所屬的問題先回覆「重跑完我會回報結果」，之後又回覆「跑完會收到通知」。等待關鍵字也加入了 `回報`、`回报`、`跑完` 與 `重跑`。
+- Codex HUD 現在能辨識 Windows Terminal 以 win32-input-mode 序列（`ESC [ Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`，ConPTY 會啟用此模式）送出的 Ctrl+\ 與 Ctrl+]。先前這些按鍵無法比對原始 0x1c/0x1d 位元組，因而被轉給 Codex。現在按下與放開的序列都不會轉給 Codex，每次按下只觸發一次動作，被切在兩次讀取之間的序列會重組，其他輸入一律原樣轉送。
+- Codex SessionStart hook 加上 `statusMessage`（"Loading model-ladder..."），`/hooks` 不再顯示為 Unnamed hook。Windows 上也會以 `systemMessage` 告知使用者 `node-pty` 背景安裝狀態：安裝中時附上 `npm-ci.log` 路徑，就緒時每個外掛版本只顯示一次。
+- Codex runner 在每個預估邊界改為先讀用量樣本、再取時間。原本樣本若晚 1 毫秒取得會被視為來自未來而捨棄，導致偶爾跳過用量風險確認。
+- PowerShell `codex` 函式不再寫死單一外掛版本資料夾：每次執行都挑已安裝的最新完整版本（含 `.codex-plugin/plugin.json`、`scripts/codex-hud.mjs`、`hooks/band/remaining.mjs`、`node_modules/node-pty`），沒有完整版本時執行原生 `codex`。修正更新後舊版快取被刪掉一部分而讓 `codex` 壞掉的問題。
+- `plugin`、`review`、`update`、`doctor`、`queue`、`archive`、`delete`、`unarchive`、`migrate-rollouts`、`migrate-nfs-db`、`features`、`exec-server`、`remote-control`、`app`、`cloud`、`sandbox` 改為直接執行原生 `codex`，不再進入 HUD。
+- **Codex CLI HUD**：顯示外掛版本、目前用量與重置倒數、保護狀態、context（`ctx 52k/258k (20.2%)`），以及執行中 agent 的經過／預估時間，格式與 Claude band 相同（顯示 `12m`，不再是 `720s`）。按 Ctrl+\ 展開成所有 agent、skills 與用量保護（最多佔終端高度一半），再按一次收合回兩列。終端較窄時依序先省略 context、版本、按鍵提示，兩個用量百分比一定完整顯示。
+- **Codex 用量交接**：信任 SessionStart hook 後，CLI HUD 會在每個已知用量視窗排入一次固定的交接指示；其他介面在 SessionStart 時收到提醒。Codex 新增 `handoff` skill，用量停止時會提示 session 撰寫 AI 交接；達到硬上限時仍保留程式產生的範本。
+- **Codex worker skills 強制檢查**：worker 須逐項回報設定的能力，適用且可用卻未使用時，該次嘗試在驗證前即判失敗。此回報由模型自行聲明。
+- **Codex router 安全檢查**：看起來是修改的任務被判成唯讀時，會在任何 worker 執行前以 `NEEDS_INPUT` 停下確認，不再誤報「沒改東西就成功」，也不會自行改成可寫入。任務中有明確的不修改指示（例如「別動任何檔案」、「不修改」、"do not modify"）時，即使含有修改字眼也維持唯讀。
+- Codex 與 Claude 面板標題顯示各自封裝外掛的版本（`model-ladder (v1.2.0)`），窄版會先省略版本以保留用量；Claude band 改為依整列標題實際寬度判斷。
+- Codex DIRECT 與 CLI HUD 只從 session ID 和 cwd 相符的 rollout 讀取 token 數。Codex agent 超過預估時間時，若 exec 事件流提供指令，會顯示最近的指令。
+- 缺少 `node-pty` 時，HUD 改啟動一般 `codex`，且不再把 HUD 自己的環境變數傳下去。
+- Codex 建立 worktree 遇到暫時性錯誤時會重試一次，再回報錯誤。
+- **Worktree 清理**：所有移除 worktree 的地方（finish、run 修剪、Codex attempt）統一走同一個 helper：用 `--force --force` 移除被鎖住的 worktree、執行 prune，並刪除殘留的 `worktree-wf_*` 分支；先前 run 留下的分支也會一併清掉。因 Windows 檔案佔用而移除失敗時會短暫重試，仍失敗就留給下次 run 的修剪處理，不阻擋目前的 run。
+- **Claude band 背景列**只顯示「所屬問題還沒結束」的任務。最終回答且不是在等某任務時，該問題的任務會隱藏（仍持續追蹤，結束通知照常移除並記錄 duration）；新問題不會隱藏舊問題的任務。限制：`turn.complete` 只給回覆文字，因此回覆為空、或提到等待、背景、通知（中英文關鍵字）就視為在等。
+- README 補上 Codex 外掛的更新步驟：更新 marketplace、重新加入外掛、在 `/hooks` 重新信任已修改的 SessionStart hook、開新 session，`node-pty` 安裝完成後開新的 PowerShell 視窗。
+- 已知限制：Codex 尚未追蹤背景工作，watcher 的交接仍須手動觸發。
+
 ## [1.1.5] - 2026-11-06
 
 - Claude Code 的 usage guard 現在會自動交接：5 小時或 7 天用量視窗達到門檻時，Band 寫入交接模板並執行 `/model-ladder:handoff`，讓主 session 寫出 AI 版。每個視窗只觸發一次（重新載入或開新 session 也不重複），視窗降回門檻以下或重設後才會再觸發。沒有 ladder run 時也會交接，因為 handoff skill 依據對話內容撰寫。
 - `handoff now` 現在真的會請主 session 寫 AI 版交接。原本使用 `$.prompt.submit`，但 Claude Code 會拒絕以 `/` 開頭的文字，因此只會顯示退回提示；現改用 `$.command.run`。
 - Worker skill 指示改為強制檢查：設定 `worker_skills` 時，worker 須逐項回報指示中提到的能力（是否適用、是否可用、是否使用、說明）；適用且可用卻未使用時，該次嘗試在驗證前即判失敗（`worker skipped required skills: ...`）。不可用或不適用的能力不算失敗。finish 報告每次嘗試多一行 `Skills`。
 - DIRECT 路徑下，主 session 現在會自行遵循 `worker_skills`，並把 `verifier_skills` 交給 verifier，與 Codex runner 一致。
-
-## [1.1.4] - 2026-11-03
-
 - Claude Code band 不再為 ladder 自己的 Workflow 啟動（`workflow: ladder`）顯示 `background` 列，使用者已經知道 model-ladder 正在選擇模型；其他非同步 Workflow 啟動仍會顯示。
 - 在 subagent 裡發出的背景 Bash 或 Workflow（例如 verifier 在背景跑測試指令）不再新增背景列。它的 task-notification 只會送給該 subagent，主 session 收不到，所以以前任務結束後該列會一直留著。
 - Claude Code 拒絕 worker 的隔離 worktree（"git could not be run to resolve it"，屬暫時性失敗）時，worker 或 test-writer 會用同一個 model 與 effort 重試一次，不再以 `stop_environment` 停掉整個 run。
 - 清理時改用 `git worktree remove --force --force`，Claude Code 鎖住的 worktree 與其 `worktree-wf_*` 分支不再殘留。
-
-## [1.1.3] - 2026-11-02
-
 - 超時估計改用歷史資料：agent 列超過預期時長後，預期值改為至少 2 筆更長的過往紀錄的中位數（agentExpectations 現在也回傳原始樣本），否則顯示階梯式估計並在前面加 `~`（例如 `12m/~14m`），Claude Code band 與 Codex 面板皆適用；Claude Code band 中超時的 agent 列會以目前的工具活動（例如 `Bash: Run unit tests`）取代任務文字，讀不到時退回任務文字。
 - Windows 上的 Codex：SessionStart hook 會在 PowerShell profile 加入有標記的 `codex` 函式，在新的 PowerShell 視窗輸入 `codex` 就會開啟 model-ladder HUD；子指令、輸入輸出被導向、缺少 `node-pty` 或 Node.js 時執行原生 `codex.exe`，`node-pty` 會在背景安裝，設定 `"hudTakeover": false` 即可移除該函式。`node-pty` 無法載入時 HUD 也會改用一般 Codex。
 - band 用量列的百分比不再使用粗體，並改用固定顏色（50% 到用量保護門檻為黃色，達到或超過門檻為紅色），因為部分介面不會套用主題色。
@@ -28,9 +71,6 @@
 - 背景 shell 列在同一指令（以第一行為準）曾經跑完後會顯示預期時長：取最近十次的中位數，跨 session 保留，超時時與 agent 列一樣重新估計；第一次執行只顯示經過時間。
 - Claude Code band 與 Codex 面板的時間欄標題由 `time` 改為 `act./est.`（實際經過 / 預估）。
 - Claude Code 的 verifier 與 diagnose 列現在也會顯示預期時長：它們的 prompt 沒有 TASK 行，且每個 ladder 步驟各是一次 workflow run，因此 band 對不到任務時改用唯一進行中的 ladder 鎖（同時有兩個以上的 run 時仍只顯示經過時間）。
-
-## [1.1.2] - 2026-11-02
-
 - Worker 新增編輯規則（僅用 Edit/Write 或 apply_patch、`uv run` 並清理、回報前檢查 `git status`）；band 檔案變更時 router 會建議 verify 包含 `claude plugin test .`。
 - Claude Code verifier 現在回傳 `workerFiles`（`git status` 中 worker 自己的未暫存與未追蹤路徑），有 verify 指令時須指令成功且每項 ACCEPTANCE 都達成才通過；通過但 `workerFiles` 為空的判定會改為失敗（`worker changed nothing`），讓 ladder 升級。
 - Claude Code band 與 Codex 面板中，執行中的 agent 列的經過時間達到預期時長後，會顯示重新估計的預期時長（預期值加上整數個步長，步長為 1 分鐘與預期值一半中較大者，直到超過經過時間，例如預期 7m 顯示 12m/14m）；已結束的列保留原本的預期時長。
@@ -39,14 +79,8 @@
 - router 另外回傳 `workerMinutes` 與 `verifyMinutes`（單次 worker 嘗試與單次驗證的正整數實際分鐘數）。plan 會把它們寫入 run 鎖的各 agent 表，作為歷史沒有樣本的階段的預期值，讓 worker 與 verifier 列從第一次 run 起就有預期時長。歷史樣本（階段加模型/effort，其次依階段）仍然優先。
 - Codex router 也會回傳 `workerMinutes` 與 `verifyMinutes`（正整數，schema 會檢查）；路由後只在歷史沒有 worker 或 verify 樣本時補進 Codex 面板的各 agent 預期表，讓第一次 Codex run 的 worker 與 verifier 列就顯示「已跑 / 預估」。
 - band 用量列的百分比改為粗體並依程度上色：低於 50% 維持一般顏色，50% 到用量保護門檻為警告色，達到或超過門檻為錯誤色；其餘文字維持淡色。指示列的摺疊箭頭後面多留一格空白。
-
-## [1.1.1] - 2026-11-02
-
 - Claude Code band 與 Codex 面板中每個 agent 列（router、worker、test-writer、verifier）的時間欄，改為顯示「該 agent 自己的經過時間 / 自己的預期時長」，不再以整個 run 的預估總時長為分母。預期時長取自先前可比較成功 run 的階段計時中位數：有兩筆樣本時依「階段加模型/effort」，之前只依階段；沒有樣本時只顯示經過時間。
 - 執行中的列即時讀取預期時長，spawn 時 run 還沒有預估也不會缺漏。`no model` 列維持顯示 run 經過時間與 run 預估總時長。
-
-## [1.1.0] - 2026-10-30
-
 - 耗時預估：耗時範圍、階段計時與各用量時間窗的餘額評估記錄於 live、result、history JSON，並以可比較的成功紀錄校準；移除拆分詢問。
 - Claude Code band 與 Codex 面板的時間欄顯示「經過/預估」（例如 `5s/12m`），沒有預估時只顯示經過時間。
 - 開跑預估顯示某個用量時間窗不足或有風險時，Claude Code 與 Codex 會在 worker 開始前詢問一次（`acceptUsageRisk: true` 為繼續）；用量保護照常生效。
@@ -60,17 +94,11 @@
 - 支援 `專案名稱: 指示` 限定角色指示，無前綴的行維持全域適用。
 - Band 只顯示適用指示，移除 `skill instructions:` 標籤，並提供可收合的單行預覽。
 - Claude Code、Codex 與 linked worktree 使用相同專案比對規則。
-
-## [1.0.2] - 2026-10-30
-
 - 精簡外掛設定註解，並在 Band 選項補上 context window 說明。
 - 在第一個設定標籤顯示安裝版本。
 - 同步精簡雙語 README、進階使用、設計說明與版本紀錄。
 - 更新 Band 範例，將詳細操作與設定參考移至進階文件。
 - 移除不可靠的效能比較與過期測試成果宣稱，保留第三方授權原文。
-
-## [1.0.1] - 2026-10-30
-
 - Codex DIRECT 使用呼叫端實測 context 與隔離草稿，通過獨立驗證後才套用。
 - Codex 選用 commit 保留無關 staged 變更，跳過含既有或並行修改的檔案。
 - Codex SessionStart 遵循個人與專案的 autorun、panel 設定，兩端 test-writer 規則一致。
@@ -79,9 +107,6 @@
 - 可辨識的純上限訊息視為 `USAGE_LIMIT`。
 - Windows 程序樹停止失敗時保留註冊並回報錯誤，不產生錯誤的已停止交接。
 - 同步兩端技能與雙語文件，涵蓋 DIRECT、commit、拆分與平台限制。
-
-## [1.0.0] - 2026-10-29
-
 第一個公開版本，包含先前開發歷史。
 
 - 為 Claude Code 與 Codex 任務選模型、隔離嘗試、獨立驗證，失敗時升級。

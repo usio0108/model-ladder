@@ -97,3 +97,24 @@ test('timeout is an idle limit: steady output outlives timeoutMs', async () => {
   assert.equal(result.code, 0)
   assert.equal(result.stdout, '........')
 })
+
+test('codexExec hands env to the child and to its sandboxed commands without changing the runner environment', async (t) => {
+  const run = mkdtempSync(join(tmpdir(), 'ladder-env-'))
+  t.after(() => rmSync(run, { recursive: true, force: true }))
+  const before = process.env.UV_CACHE_DIR
+  const cache = join(run, '.uv-cache')
+  // Prints what it received, then writes the schema-valid worker output Codex would write with -o.
+  const script = `const args = process.argv.slice(1); const out = args[args.indexOf('-o') + 1]
+    require('node:fs').writeFileSync(out, JSON.stringify({ status: 'done', summary: JSON.stringify({ args, cache: process.env.UV_CACHE_DIR, offline: process.env.UV_OFFLINE }), blockedReason: null }))`
+  const { value } = await codexExec({
+    phase: 'worker', cell: { model: 'test', effort: 'low' }, cwd: run, run, prompt: 'test', sandbox: 'workspace-write', timeoutMs: 5000,
+    env: { UV_CACHE_DIR: cache, UV_OFFLINE: '1' }, executable: { command: process.execPath, prefixArgs: ['-e', script, '--'] },
+  })
+  const seen = JSON.parse(value.summary)
+  assert.equal(seen.cache, cache)
+  assert.equal(seen.offline, '1')
+  assert.ok(seen.args.includes(`shell_environment_policy.set.UV_CACHE_DIR=${JSON.stringify(cache)}`))
+  assert.ok(seen.args.includes('shell_environment_policy.set.UV_OFFLINE="1"'))
+  assert.equal(seen.args[seen.args.indexOf('-c') + 1], 'model_reasoning_effort="low"')
+  assert.equal(process.env.UV_CACHE_DIR, before)
+})

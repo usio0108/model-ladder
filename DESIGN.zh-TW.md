@@ -72,6 +72,8 @@ Claude 外掛的 `worker_skills`、`verifier_skills` 併入個人層，專案同
 `legalMoves`、`pickMove` 來自共用產生規則，測試會檢查是否偏離來源。
 Worker 死亡或輸出無效算該步驟失敗，診斷失敗使用預設合法移動。
 Codex 的認證、模型存取與 sandbox 錯誤直接停止，不升級重試。
+Codex worker 與 verifier 的 sandbox 沒有網路，worktree 也沒有 `.venv` 或 `node_modules`。uv 專案透過角色環境變數以唯讀方式借用主 checkout 的 `.venv`（`scripts/codex-run.mjs` 的 `sandboxEnv`）；沒有該 `.venv` 的 uv 驗證，或缺少 `node_modules` 而失敗的 npm 類檢查，只停止一次，不升級重試。
+verify 指令與 verifier 在以 worker 快照建立的獨立 `attempt-<n>-verify` worktree 中執行，worker 留下的 ignored 檔案（Windows 上為不同 sandbox 帳號）因此不會影響它們；驗證後的檢查以該 worktree 對照快照，保留的仍是 worker 的 worktree。
 
 ## 隔離與並行執行
 
@@ -103,15 +105,15 @@ Codex 的認證、模型存取與 sandbox 錯誤直接停止，不升級重試�
 驗證可產生 build artifact，但既有 tracked 輸入仍會檢查。
 Hook 屬提前防護，Node 不可用時放行，最終 diff 檢查仍執行保護。
 
-## DIRECT、拆分與續跑
+## DIRECT 與續跑
 
 | 功能 | 規則 |
 |---|---|
 | DIRECT | 小任務且實測 context 達 `direct_threshold`，路由決定本身不等於通過驗證。 |
 | Claude DIRECT | 主 session 修改後交獨立 verifier，最多三輪修正。 |
 | Codex DIRECT | 呼叫端修改隔離草稿，`directRun` 再認領範圍、核對基線、驗證及套用。 |
-| 預估 | 耗時範圍、階段實際計時與各用量時間窗的餘額評估；面板顯示經過/預估；時間窗不足或有風險時在 worker 前確認一次；不要求拆分確認。 |
-| 強制 ladder | `forceLadder` 停用 DIRECT 與拆分建議。 |
+| 預估 | 耗時範圍、階段實際計時與各用量時間窗的餘額評估；面板顯示經過/預估；時間窗不足或有風險時在 worker 前確認一次。 |
+| 強制 ladder | `forceLadder` 停用 DIRECT。 |
 | 逾時 | `timeoutMs` 限制沒有輸出的閒置時間。 |
 | Codex 續跑 | 核對 checkout、任務、驗收與設定，再以新 worktree 延續草稿。 |
 

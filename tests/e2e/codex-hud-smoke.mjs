@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { artifactDir } from '../../scripts/common.mjs'
 
 let pty
 try {
@@ -11,7 +11,9 @@ try {
 } catch {
   throw new Error('node-pty is required for the Codex HUD terminal smoke')
 }
-const root = mkdtempSync(join(tmpdir(), 'ml-hud-smoke-'))
+const base = artifactDir(fileURLToPath(new URL('../../', import.meta.url)))
+mkdirSync(base, { recursive: true })
+const root = mkdtempSync(join(base, 'ml-hud-smoke-'))
 let terminal, closed, result, failure
 let output = ''
 const waitFor = async (predicate, label, timeout = 15000) => {
@@ -23,6 +25,8 @@ const waitFor = async (predicate, label, timeout = 15000) => {
 }
 try {
   mkdirSync(join(root, '.model-ladder'))
+  mkdirSync(join(root, '.model-ladder', 'runs'))
+  writeFileSync(join(root, '.model-ladder', 'runs', 'hud-smoke.json'), JSON.stringify({ runId: 'hud-smoke', pid: process.pid }))
   writeFileSync(join(root, '.model-ladder/live.json'), JSON.stringify({
     runId: 'hud-smoke',
     agents: [{ phase: 'worker', model: 'gpt-test', effort: 'low', startedAt: new Date().toISOString(), endedAt: null }],
@@ -34,14 +38,14 @@ try {
   })
   closed = new Promise((resolve) => terminal.onExit((event) => { result = event; resolve(event) }))
   terminal.onData((data) => { output += data })
-  await waitFor(() => /fake Codex ready/.test(output) && /gpt-test\/low \| RUNNING/.test(output), 'prompt and HUD')
+  await waitFor(() => /fake Codex ready/.test(output) && /gpt-test\/low/.test(output), 'prompt and HUD')
   assert.match(output, /fake Codex ready/)
-  assert.match(output, /model-ladder \| worker \| gpt-test\/low \| RUNNING/)
-  assert.match(output, /\x1b\[8;1H/)
+  assert.match(output, /gpt-test\/low.*worker/)
+  assert.match(output, /\x1b\[7;1H/)
   terminal.resize(40, 6)
-  await waitFor(() => /fake size 40x5/.test(output) && /\x1b\[6;1H/.test(output), 'child resize and HUD repaint')
+  await waitFor(() => /fake size 40x4/.test(output) && /\x1b\[5;1H/.test(output), 'child resize and HUD repaint')
   writeFileSync(join(root, '.model-ladder/live.json'), '{broken')
-  await waitFor(() => /waiting/.test(output), 'corrupt live.json fallback')
+  await waitFor(() => /idle/.test(output), 'corrupt live.json fallback')
   rmSync(join(root, '.model-ladder/live.json'))
   terminal.write('input-check')
   await waitFor(() => /input-check/.test(output), 'forwarded input with missing live.json')

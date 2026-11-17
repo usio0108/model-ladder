@@ -7,7 +7,7 @@
 // Only node built-ins here: hooks/guard.mjs imports this file.
 import { randomUUID } from 'node:crypto'
 import { linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, closeSync, writeSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 export const runsDir = (root) => join(root, '.model-ladder', 'runs')
 export const legacyLock = (root) => join(root, '.model-ladder', 'run.json')
@@ -55,22 +55,27 @@ export function readLocks(root) {
 
 // Written whole through a rename, so a reader never sees half a lock.
 // On Windows the rename fails while another process has the target open (a guard reading it); retry briefly.
-function writeAtomic(path, value) {
+// Write JSON through a temp file and rename. On Windows the rename fails with EPERM/EBUSY/EACCES while another
+// process (a panel reading live.json, an antivirus or editor watcher) has the target open, so retry for ~1s.
+export function atomicJson(path, value) {
+  mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
-  writeFileSync(tmp, JSON.stringify(value, null, 2))
-  for (let tries = 0; ; tries++) {
-    try { renameSync(tmp, path); return } catch (error) {
-      if (tries >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) { rmSync(tmp, { force: true }); throw error }
-      sleep(50)
+  try {
+    writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' })
+    for (let tries = 0; ; tries++) {
+      try { renameSync(tmp, path); return } catch (error) {
+        if (tries >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error
+        sleep(50)
+      }
     }
-  }
+  } finally { rmSync(tmp, { force: true }) }
 }
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
 export function createLock(root, lock) {
   mkdirSync(runsDir(root), { recursive: true })
   const value = { scope: null, readOnly: false, startedAt: new Date().toISOString(), ...lock }
-  writeAtomic(lockPath(root, lock.runId), value)
+  atomicJson(lockPath(root, lock.runId), value)
   return value
 }
 
@@ -151,7 +156,7 @@ export function claimScope(root, runId, { scope, readOnly = false, clear = false
       }
     }
     const { path, legacy, stale: _, ...data } = own
-    writeAtomic(path, { ...data, scope: claimed, readOnly })
+    atomicJson(path, { ...data, scope: claimed, readOnly })
     return { status: 'READY', scope: claimed }
   })
 }

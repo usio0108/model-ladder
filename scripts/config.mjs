@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { CONFIG_FILE, mergeConfig, pluginLayer, projectSkills, setGuard, userConfigPath as pathFor } from '../hooks/config-layers.mjs'
-import { atomicJson } from './codex-live.mjs'
+import { atomicJson } from './runs.mjs'
 import { worktrees } from './common.mjs'
 
 export const userConfigPath = (runtime, env = process.env) => pathFor(runtime, env, homedir())

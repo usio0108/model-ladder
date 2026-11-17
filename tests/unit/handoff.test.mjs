@@ -161,10 +161,14 @@ test('codex SKILL.md: availability check, USAGE_LIMIT and requested handoff, tem
   assert.match(text, /not available in this project/)
   assert.match(text, /do not stop the run/)
   assert.match(text, /capability blockers/)
-  assert.match(text, /USAGE_LIMIT, or the user asks for a handoff/)
-  assert.match(text, /rewrite `\.model-ladder\/HANDOFF\.md` yourself/)
-  assert.match(text, /Appendix: program-generated verification \(authoritative\)/)
+  assert.match(text, /`needsAiHandoff: true`, use the named `handoffSkill`/)
+  assert.match(text, /also when the user requests a handoff/)
   assert.match(text, /hard usage limit and you cannot call the model again, keep the template/)
+  // The rewrite itself, with the program-generated appendix, lives in the Codex handoff skill.
+  const skill = read('codex-skills/handoff/SKILL.md')
+  assert.match(skill, /watch\.mjs --handoff/)
+  assert.match(skill, /\.model-ladder\/HANDOFF\.md/)
+  assert.match(skill, /Appendix: program-generated verification \(authoritative\)/)
   // The numbered steps stay consecutive.
   const steps = [...text.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]))
   assert.deepEqual(steps, steps.map((_, i) => i + 1))

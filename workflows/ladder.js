@@ -184,8 +184,9 @@ function guardStop(raw) {
 // Another agent would fail the same way until the reset, so the run stops and hands off. Independent of usageGuard.
 const HARD_LIMIT = /hit your (?:session |weekly |daily |opus |usage |5-hour )?limit|usage limit|rate[ _-]?limit|limit reached|too many requests|out of (?:extra )?usage|\b429\b/i
 
-// Claude Code sometimes refuses a freshly created, healthy isolation worktree ("Refusing to use <path> as an
-// isolation worktree: git could not be run to resolve it ..."). The refusal is transient: a new worktree works.
+// Claude Code can refuse a healthy isolation worktree ("Refusing to use <path> as an isolation worktree: ..."):
+// sometimes transiently, and on some Windows sessions every time (it compares c:\ and C:/ as different paths).
+// After a refusal the run stops asking for host isolation; workers create their own worktree (brief's `own`).
 function isolationRefused(measurement) {
   return !measurement.limit && /Refusing to use\s[\s\S]*\sas an isolation worktree/i.test(measurement.error ?? '')
 }
@@ -195,6 +196,33 @@ function hardLimit(text) {
   if (!HARD_LIMIT.test(message)) return null
   const resets = message.match(/\bresets?\s+(?:at\s+|in\s+)?([^·\n;|]+)/i)?.[1]?.replace(/[\s.]+$/, '') || null
   return { message, resets }
+}
+
+// Workers and verifiers may not commit, stage or push, so a router-written acceptance item that needs a commit, a push,
+// a tag, a release or a clean working tree fails every attempt. Items that forbid those actions stay.
+const NEGATED = /\b(?:no|not|never|without|none|nothing|neither)\b|n't\b/i
+const NEEDS_FINISH = [
+  /\b(?:committed|pushed|tagged|staged|published)\b/i,
+  /\bcommits?\b(?!\s+(?:message|hook|history|log|style|convention))[^.;]{0,40}\b(?:is|are|exists?|created?|made|recorded|present|done|included)\b/i,
+  /\b(?:create|make|record|add)\w*\s+(?:a |the |one |new )*commits?\b/i,
+  /\b(?:git\s+tag|tag\s+v?\d[\w.-]*|tags?\b[^.;]{0,30}\b(?:created?|exists?|pushed|present))/i,
+  /\bpush(?:es)?\b[^.;]{0,30}\b(?:is|are|succeeds?|done|made|completed?|to (?:the )?(?:remote|origin))\b/i,
+  /\breleases?\b(?!\s+(?:notes?|script|workflow|config|docs?|checklist|process))[^.;]{0,40}\b(?:is|are|exists?|created?|made|published|done|present)\b/i,
+]
+const NEEDS_CLEAN_TREE = [
+  /\b(?:working\s+(?:tree|directory|copy)|work\s?tree|git\s+status|git\s+tree|repo(?:sitory)?)\b[^.;]{0,40}\bclean\b/i,
+  /\bclean\s+(?:working\s+(?:tree|directory|copy)|work\s?tree|git\s+status|status|tree)\b/i,
+  /\bno\s+(?:uncommitted|unstaged|untracked|pending)\s+(?:changes|files)\b/i,
+  /\bnothing\s+(?:left\s+)?(?:to commit|uncommitted)\b/i,
+  /\bgit\s+status\b[^.;]{0,40}\b(?:empty|nothing)\b/i,
+]
+
+function dropUnachievableAcceptance(items) {
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const text = String(item)
+    if (NEEDS_CLEAN_TREE.some((re) => re.test(text))) return false
+    return NEGATED.test(text) || !NEEDS_FINISH.some((re) => re.test(text))
+  })
 }
 // </pure>
 
@@ -321,7 +349,7 @@ async function callAgent(prompt, opts) {
     return { result: null, error, limit, tokens: budget.spent() - before }
   } catch (e) {
     const message = String(e?.message ?? e)
-    return { result: null, error: `failed: ${message.slice(0, 200)}`, limit: hardLimit(message), tokens: budget.spent() - before }
+    return { result: null, error: `failed: ${message.slice(0, 600)}`, limit: hardLimit(message), tokens: budget.spent() - before }
   }
 }
 
@@ -338,8 +366,11 @@ async function measured(prompt, opts) {
     return entry.measurement
   }
   if (args.telemetry && executed) throw { boundary: true }
-  executed = true
   const measurement = await callAgent(prompt, opts)
+  // A refused isolation worktree never started an agent: no boundary and no journal entry, so the own-worktree
+  // rerun follows in this same Workflow call. A main session that stopped at that boundary never reached it.
+  if (isolationRefused(measurement)) return measurement
+  executed = true
   if (args.telemetry) {
     journal.push({ phase: phaseName, model: opts.model, effort: opts.effort, measurement })
     replayIndex++
@@ -374,7 +405,7 @@ Also return:
 - goal: the task as one sentence a stranger could execute.
 - scope: files you expect to change.
 - verify: ${verifyKnown}
-- acceptance: checkable done criteria, one per item. ${args.acceptance?.length ? 'The user already gave them; return them unchanged.' : 'Empty if the verify command alone defines done.'}
+- acceptance: checkable done criteria, one per item, limited to what a worker can do in an isolated worktree and a verifier can judge from the diff. Never list commit, push, release, tag or clean-working-tree conditions: the worker may not commit or stage, and finishing is handled outside the attempt. ${args.acceptance?.length ? 'The user already gave them; return them unchanged.' : 'Empty if the verify command alone defines done.'}
 - allowTests: true only when the task itself is to write or change tests. A bug fix is not: the tests define the expected behavior.
 - question: if the task is too vague to act on (no clear outcome, several very different readings), the one question that would settle it. Otherwise null. A worker would guess, and passing tests would hide the guess.
 - small: true when the task touches one or two files and its design is already given (for example "implement this function as described"), so a capable model would finish it in one pass. Otherwise false.
@@ -390,7 +421,7 @@ Also return:
   const lowest = { model: config.tiers[0].model, effort: config.tiers[0].efforts[0] }
   const start = isCell(r, config.tiers) ? { model: r.model, effort: r.effort } : lowest
   const verify = config.verify ?? (args.hasVerifySkill ? VERIFY_SKILL : r.verify)
-  const acceptance = args.acceptance?.length ? args.acceptance : r.acceptance
+  const acceptance = args.acceptance?.length ? args.acceptance : dropUnachievableAcceptance(r.acceptance)
   const startReason = isCell(r, config.tiers) ? r.reason : `Router picked ${label(r)}, not in the grid; starting at ${label(lowest)}`
   const direct = isDirect(r.small === true, args.contextTokens, args.forceLadder, args.contextWindow, args.directThreshold)
   return {
@@ -417,6 +448,7 @@ Also return:
     // Built here, not by the skill: the question box shows one flat paragraph, so the list goes in a message.
     acceptanceMessage: `**Ladder start:** ${label(start)} — ${startReason}\n\n**Acceptance criteria (proposed)**\n${acceptance.map((a, i) => `${i + 1}. ${a}`).join('\n')}\n\nTip: run /model-ladder:create-verification-skill to generate .claude/skills/verify/; the ladder will use it automatically next time.`,
     acceptanceQuestion: 'Run with these criteria?',
+    acceptanceStart: label(start),
     routeTokens: tokens,
   }
 }
@@ -432,7 +464,8 @@ const skillsSection = (v) => {
   return `SKILL INSTRUCTIONS\n${v}\n\nInterpret these natural-language instructions in the context of your assigned task and role. Evaluate each condition first, then select only the applicable relevant skills, plugins, slash commands, MCP tools or other capabilities actually available to you. Existing name lists are requests to use those capabilities where relevant. A name may be a skill, a plugin name or an MCP server name (tools named mcp__<server>__*); map it to the matching available capability. Read selected skills' instructions and invoke them with the Skill tool, and call plugin, slash-command and MCP tools directly. If an applicable required capability cannot be found, report it explicitly as a blocker and list the available capabilities you checked; never invent names or claim to have used a capability you did not invoke. Stay within this role's scope, permissions, protected paths and verification rules, even if a capability asks for more. Verifiers only check and report; they never fix code. Never invoke model-ladder skills, workflows or runners, the Workflow tool, or other agents, recursively.`
 }
 
-function brief(plan, history, hint) {
+// own: the repo-relative path of a worktree the worker creates itself, when host isolation was refused.
+function brief(plan, history, hint, own = null) {
   const sections = [
     `GOAL\n  ${plan.goal}`,
     `TASK (as the user wrote it)\n  ${args.task}`,
@@ -445,22 +478,30 @@ function brief(plan, history, hint) {
     sections.push('READ-ONLY\n  You run in the user\'s own checkout, not a worktree. Do not create, modify or delete any file, and run no git command that changes state. Your summary is the deliverable: put the full report in it.')
   } else {
     sections.push(`FORBIDDEN\n  Do not create, modify or delete files matching: ${plan.protected.join(', ') || '(none)'}\n  Do not commit. Do not stage files (no \`git add\`). Do not touch files outside this worktree.`)
-    // The worktree is created from the remote default branch, not from the user's branch.
-    const setup = [`git reset -q --hard ${args.baseCommit}`]
+    if (own) {
+      sections.push(`OWN WORKTREE\n  Claude Code refused to isolate you, so you create your own worktree. You start in the user's own checkout: never create, modify or delete anything there.\n` +
+        `  1. In your starting directory run \`git rev-parse --show-toplevel\`; call its output ROOT.\n` +
+        `  2. Run \`git -C "ROOT" worktree add --detach "ROOT/${own}" ${args.baseCommit}\`; call ROOT/${own} WT.\n` +
+        `  From then on work only inside WT: start every shell command with \`cd "WT" && \`, and give Read, Edit and Write absolute paths under WT.`)
+    }
+    // A host worktree is created from the remote default branch, not from the user's branch; an own worktree already starts at baseCommit.
+    const setup = own ? [] : [`git reset -q --hard ${args.baseCommit}`]
     if (args.setupPatch) {
       setup.push(`git apply --whitespace=nowarn "${args.setupPatch}"`)
       // Staged, so the verifier's plain `git diff` shows only the worker's own changes.
       setup.push('git add -A')
     }
-    sections.push(`SETUP (do this first, in order)\n${setup.map((s) => `  ${s}`).join('\n')}\n  This moves the worktree to the user's current commit` +
-      (args.setupPatch ? ' and applies their uncommitted changes; build on them.' : '.'))
+    if (setup.length) {
+      sections.push(`SETUP (do this first, in order${own ? ', inside WT' : ''})\n${setup.map((s) => `  ${s}`).join('\n')}\n  This moves the worktree to the user's current commit` +
+        (args.setupPatch ? ' and applies their uncommitted changes; build on them.' : '.'))
+    }
   }
   if (history.length) {
     sections.push(`PREVIOUS ATTEMPTS (each started from a clean tree like yours; their code is gone)\n${bullets(history.map(summarize))}`)
     sections.push(`HINT\n  ${hint}`)
   }
   const skills = skillsSection(args.skills?.worker)
-  if (skills) sections.push(`${skills}\n\nIn the skills field of your report, list every capability these instructions name, one entry each: applies (its condition holds for this task), available (you found it here), used (you actually invoked it in this attempt), note (how it was used, or why not). An applicable capability that is available but not used fails this attempt, so invoke it before you report.`)
+  if (skills) sections.push(`${skills}\n\nIn the skills field of your report, list every capability these instructions name, one entry each: applies (its condition holds for this task), available (you found it here), used (see below), note (how it was used, or why not). Every named capability whose condition applies is mandatory: invoke it before you report. used is true only if you yourself invoked that capability during this attempt: a Skill tool call for a skill, a direct tool call for an MCP, plugin or slash command. Rules injected by hooks (SessionStart, SubagentStart), a mode that was already active, or following a skill in spirit without invoking it do NOT count; report those as used:false. An applicable capability that is available but not used fails this attempt.`)
   sections.push('EDITING RULES\n  Edit files with the Edit/Write tools, never through an interpreter one-off (python/node -e/sed scripts) whose failure can be silent.\n  If Python is genuinely needed, run it with `uv run` (ephemeral). If the project did not already use Python, delete everything that run created (.venv, uv.lock, __pycache__, scratch scripts) before reporting.\n  Before reporting done, run `git status --porcelain --untracked-files=all` in the worktree and confirm every file you claim in filesChanged shows a worker change (second column not a space, or ??).')
   sections.push('REPORT\n  worktreePath: the output of `git rev-parse --show-toplevel` (not pwd).\n  status "blocked" only if the task cannot be done; say why in blockedReason. In summary, include concise handoff context: progress, decisions, user constraints supplied in TASK, cautions, failed approaches, and next steps. Separate verified work from unverified claims. Do not infer parent conversation context.')
   return sections.join('\n\n')
@@ -546,18 +587,27 @@ async function run(plan) {
     tokens,
   })
 
+  // Set by the first host refusal and kept for the rest of this Workflow call. Refusals are not journaled, so a later
+  // call that replays an attempt starts without it; its next live worker is refused again and falls back the same way.
+  let ownWorktrees = false
+  const runKey = String(args.runId ?? 'run').replace(/^[a-z]+-/, '').slice(0, 8)
+
   for (let n = 1; n <= config.maxAttempts; n++) {
     phase(`Attempt ${n}`)
-    const runWorker = () => measured(brief(plan, history, hint), {
-      label: `worker ${label(cell)}`, phase: `Attempt ${n}`, schema: workerSchema(),
-      agentType: workerType, ...(plan.readOnly ? {} : { isolation: 'worktree' }), ...cell,
-    })
+    const runWorker = () => {
+      const own = ownWorktrees && !plan.readOnly ? `.claude/worktrees/ladder-${runKey}-${n}` : null
+      return measured(brief(plan, history, hint, own), {
+        label: `worker ${label(cell)}`, phase: `Attempt ${n}`, schema: workerSchema(),
+        agentType: workerType, ...(plan.readOnly || own ? {} : { isolation: 'worktree' }), ...cell,
+      })
+    }
     let worker = await runWorker()
     let workerTokens = worker.tokens
-    // A transient host refusal of a healthy worktree: one more try with the same cell, no diagnosis, no escalation.
-    // A separate measured() call, so the boundary and journal replay still allow one agent per Workflow call.
-    if (isolationRefused(worker)) {
-      log(`#${n} ${label(cell)}: isolation worktree refused; retrying once with the same model and effort`)
+    // A host refusal of a healthy worktree: the same cell again, in a worktree the worker creates itself; no diagnosis,
+    // no escalation, and in the same Workflow call (measured() does not count the refused agent).
+    if (!ownWorktrees && isolationRefused(worker)) {
+      log(`#${n} ${label(cell)}: isolation worktree refused; the worker creates its own worktree from now on`)
+      ownWorktrees = true
       worker = await runWorker()
       workerTokens += worker.tokens
     }

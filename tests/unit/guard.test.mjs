@@ -47,6 +47,16 @@ test('finds the main repo marker from inside a linked worktree', () => {
   execFileSync('git', ['-C', repo, 'worktree', 'remove', '--force', wt])
 })
 
+test('a worker in its own worktree starts in the main checkout; paths are still relative to the worktree', () => {
+  const wt = join(repo, '.claude', 'worktrees', 'ladder-1')
+  execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', '--detach', wt])
+  writeMarker()
+  const tester = (file) => check(input({ agent_type: 'model-ladder:test-writer', tool_input: { file_path: join(wt, file) } }))
+  assert.match(tester('.claude/model-ladder.json'), /\.claude\/model-ladder\.json is protected/)
+  assert.equal(tester('src/new/a.py'), null)
+  execFileSync('git', ['-C', repo, 'worktree', 'remove', '--force', wt])
+})
+
 test('no marker means no run, so nothing is blocked', () => {
   rmSync(marker, { force: true })
   assert.equal(check(input()), null)

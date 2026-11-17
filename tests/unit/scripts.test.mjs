@@ -188,7 +188,7 @@ test('skill instructions are plugin options (the default for every project) that
   const skill = read(root, 'skills/run/SKILL.md')
   assert.match(skill, /preflight\.mjs" --plugin-options <<'EOF'\n\{ "task": "<task>", "worker_skills": "\$\{user_config\.worker_skills\}", "verifier_skills": "\$\{user_config\.verifier_skills\}", "direct_threshold": "\$\{user_config\.direct_threshold\}" \}\nEOF/)
   assert.match(skill, /"contextTokens": <estimate>, "contextWindow": <window>/)
-  assert.match(read(root, 'hooks/band/register.tsx'), /pluginLayer\(options\)/)
+  assert.match(read(root, 'hooks/band/register.tsx'), /pluginLayer\(options(?: as any)?\)/)
 })
 
 // preflight with the plugin options on stdin, as skills/run/SKILL.md runs it.

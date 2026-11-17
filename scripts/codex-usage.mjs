@@ -1,6 +1,6 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 const find = (value, key) => {
   if (!value || typeof value !== 'object') return undefined
@@ -15,6 +15,54 @@ const newest = (dir) => {
     if (hit && (!best || hit.mtime > best.mtime)) best = hit
   }
   return best
+}
+
+// Only parse session metadata and token_count events from the explicitly identified session.
+export function readCodexContext(cwd, sessionId = process.env.CODEX_THREAD_ID ?? process.env.CODEX_SESSION_ID, home = process.env.CODEX_HOME ?? join(homedir(), '.codex')) {
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId ?? '')) return null
+  const findSession = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) { const found = findSession(path); if (found) return found }
+      else if (entry.name.endsWith(`-${sessionId}.jsonl`)) return path
+    }
+  }
+  let fd
+  try {
+    const path = findSession(join(home, 'sessions'))
+    if (!path) return null
+    fd = openSync(path, 'r')
+    const buffer = Buffer.alloc(65536)
+    let pending = Buffer.alloc(0), first = true, context = null, count
+    const field = (line, name, from = 0) => {
+      const key = line.indexOf(`"${name}"`, from)
+      if (key < 0) return null
+      const colon = line.indexOf(58, key + name.length + 2), start = line.indexOf(34, colon + 1), end = line.indexOf(34, start + 1)
+      return colon < 0 || start < 0 || end < 0 ? null : { value: line.subarray(start + 1, end).toString('utf8'), end }
+    }
+    const processLine = (line) => {
+      if (first) {
+        first = false
+        const meta = JSON.parse(line.toString('utf8'))
+        const same = (a, b) => process.platform === 'win32' ? resolve(a).toLowerCase() === resolve(b).toLowerCase() : resolve(a) === resolve(b)
+        if (meta.type !== 'session_meta' || (meta.payload?.id ?? meta.payload?.session_id) !== sessionId || typeof meta.payload?.cwd !== 'string' || !same(meta.payload.cwd, cwd)) throw new Error('Session identity mismatch')
+      } else if (field(line, 'type')?.value === 'event_msg' && field(line, 'type', line.indexOf('"payload"'))?.value === 'token_count') {
+        try {
+          const event = JSON.parse(line.toString('utf8'))
+          if (event.type !== 'event_msg' || event.payload?.type !== 'token_count') return
+          const info = event.payload.info, tokens = info?.last_token_usage?.input_tokens, window = info?.model_context_window
+          if (Number.isFinite(tokens) && tokens >= 0 && Number.isFinite(window) && window > 0) context = { tokens, window }
+        } catch {}
+      }
+    }
+    while ((count = readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+      pending = Buffer.concat([pending, buffer.subarray(0, count)])
+      let end
+      while ((end = pending.indexOf(10)) !== -1) { processLine(pending.subarray(0, end)); pending = pending.subarray(end + 1) }
+    }
+    if (pending.length) processLine(pending)
+    return context
+  } catch { return null } finally { if (fd !== undefined) closeSync(fd) }
 }
 // Highest used_percent among unexpired windows of the latest Codex session; null = unknown (never blocks).
 // details: true returns labelled 5h/7d windows instead, with null for unknown/expired windows.

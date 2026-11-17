@@ -4,8 +4,9 @@ import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { Background, Row } from './types'
 import { roundSpan } from './remaining.mjs'
 import { formatContext } from './context.mjs'
-import { activityText, addBackground, medianDuration, recordDuration, addRow, agentExpected, agentSamples, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount } from './rows.mjs'
+import { activityText, addBackground, isWaitingAnswer, markAnswered, medianDuration, recordDuration, addRow, agentExpected, agentSamples, anyRunning, backgroundRows, finishRow, isRedo, liveExpected, removeBackground, removeRow, runCount, showAll } from './rows.mjs'
 import { GUARD_DEFAULT, mergeConfig, parseThreshold, pluginLayer, projectPins, projectSkills, setGuard, userConfigPath } from '../config-layers.mjs'
+import { displayWidth, panelTitle } from '../../scripts/panel-title.mjs'
 
 const rows = atom({ plugin: 'model-ladder', key: 'rows' } as const, [])
 // In-flight background tasks of this session (Bash background calls, async Workflow launches), shown while nothing else is.
@@ -30,6 +31,11 @@ const userPath = async ($: EngineInterface) => userConfigPath('claude', {
 }, (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')) ?? '~')
 async function readJson($: EngineInterface, path: string): Promise<Config> {
   try { return JSON.parse(await $.fs.read(path)) } catch { return {} }
+}
+async function installedTitle($: EngineInterface) {
+  const root = await $.env.get('CLAUDE_PLUGIN_ROOT')
+  if (!root) return 'model-ladder'
+  try { return panelTitle(await $.fs.read(`${root}/.claude-plugin/plugin.json`)) } catch { return 'model-ladder' }
 }
 async function editUserConfig($: EngineInterface, edit: (c: Config) => Config) {
   const path = await userPath($)
@@ -151,11 +157,12 @@ const agentExpectedMs = (locks: Lock[], tasks: Map<string, string>, r: Row) =>
 
 // Records one background launch from its tool result; the band only watches, so a failure here is swallowed.
 // key: what its past durations are stored under (a shell command's first line), so a repeat has an expected duration.
-const track = async ($: EngineInterface, kind: Background['kind'], id: unknown, label: unknown, key?: unknown) => {
+// question: the user question it belongs to (rows.mjs backgroundRows).
+const track = async ($: EngineInterface, question: number, kind: Background['kind'], id: unknown, label: unknown, key?: unknown) => {
   try {
     if (typeof id !== 'string' || !id) return
     const firstLine = (v: unknown) => String(v ?? '').trim().split('\n')[0].trim()
-    const task: Background = { id, kind, label: firstLine(label), startedAt: await $.clock.now(), ...(firstLine(key) && { key: firstLine(key) }) }
+    const task: Background = { id, kind, label: firstLine(label), startedAt: await $.clock.now(), question, answered: false, ...(firstLine(key) && { key: firstLine(key) }) }
     await update($, background, (l) => addBackground(l, task))
   } catch { /* bookkeeping only */ }
 }
@@ -237,6 +244,9 @@ export const register: Register = (on, options) => {
   let lastContext = ''
   // Redraws once a second while background rows show, so their elapsed time moves.
   let bgTick: Timer | null = null
+  // The user question being worked on: bumped by each user prompt (never by a task-notification), set back to a task's
+  // question when its notification wakes the session.
+  let question = 0
 
   // Records the subscription usage where preflight and the verifier read it, so the usage guard needs no statusline.
   // It runs with the band hidden too: the guard depends on it, not on the drawing. At the guard's threshold it also
@@ -281,14 +291,14 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
     if (e.agentId) return ran
-    await track($, 'shell', ran.result?.backgroundTaskId, e.description || e.command, e.command)
+    await track($, question, 'shell', ran.result?.backgroundTaskId, e.description || e.command, e.command)
     return ran
   })
   on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
     const ran = await next(e)
     // The ladder's own launch gets no row: the person already knows model-ladder is choosing a model.
     if (e.agentId || e.workflow === 'ladder' || ran.result?.workflowName === 'ladder') return ran
-    await track($, 'workflow', ran.result?.taskId, ran.result?.workflowName || e.description)
+    await track($, question, 'workflow', ran.result?.taskId, ran.result?.workflowName || e.description)
     return ran
   })
 
@@ -307,13 +317,23 @@ export const register: Register = (on, options) => {
         const ids = [...e.text.matchAll(/<task-id>([\s\S]*?)<\/task-id>/g)].map((m) => m[1].trim())
         // A command that ran to its end adds its duration to that command's history; a stopped one (TaskStop) does not.
         const now = await $.clock.now()
-        const ended = (await read($, background)).filter((t) => ids.includes(t.id) && t.key)
+        const hit = (await read($, background)).filter((t) => ids.includes(t.id))
+        // The notification wakes Claude for the question that started those tasks: its other tasks show again until that turn ends.
+        const woken = hit.find((t) => t.question !== undefined)?.question
+        if (woken !== undefined) {
+          question = woken
+          await update($, background, (l) => markAnswered(l, woken, false))
+        }
+        const ended = hit.filter((t) => t.key)
         if (ids.length) await update($, background, (l) => removeBackground(l, ids))
         if (ended.length) {
           let history = ((await $.store.get(DURATIONS)) ?? {}) as Record<string, number[]>
           for (const t of ended) history = recordDuration(history, t.key, now - t.startedAt)
           await $.store.set(DURATIONS, history)
         }
+      } else {
+        // A new user question; tasks of earlier questions keep their own state.
+        question += 1
       }
     } catch { /* bookkeeping only */ }
     return next(e)
@@ -322,7 +342,7 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const result = await next(e)
     // A background subagent the main session spawned itself (not a ladder agent) is a background row until it ends.
-    if (!e.workflow && e.background && result.agentId) await track($, 'agent', result.agentId, e.description)
+    if (!e.workflow && e.background && result.agentId) await track($, question, 'agent', result.agentId, e.description)
     if (!e.workflow || !e.subagentType.startsWith('model-ladder:') || !result.agentId) return result
     const hasTask = /TASK[^\n]*\n\s*[^\n]+/.test(e.prompt)
     if (hasTask) tasks.set(e.workflow.runId, taskOf(e.prompt, ''))
@@ -371,6 +391,13 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId) await update($, background, (l) => removeBackground(l, [e.agentId!]))
+    else {
+      // The main session's turn ended: a final answer (not waiting) hides this question's tasks; a waiting reply shows
+      // every task still running, including an earlier question's that an earlier reply hid.
+      const waiting = isWaitingAnswer((e as { answer?: unknown }).answer)
+      const turnQuestion = question
+      await update($, background, (l) => (waiting ? showAll(l) : markAnswered(l, turnQuestion, true))).catch(() => undefined)
+    }
     const finished = e.agentId ? (await read($, rows)).find((r) => r.id === e.agentId) : undefined
     if (e.agentId && finished) {
       const id = e.agentId
@@ -426,6 +453,7 @@ export const register: Register = (on, options) => {
     const folded = await read($, isFolded)
     const fold = <Button key="fold" plain dimColor label={folded ? '▾' : '▴'} onPress={() => update($, isFolded, (v) => !v)} />
     const last = running.at(-1)
+    const fullTitle = await installedTitle($)
     const runs = runCount(shown)
     // With 2+ runs each row says which run it belongs to, by that run's task.
     const tag = (r: Row) => (runs > 1 ? `${fit(tasks.get(r.run) ?? '', 20).trim()} ` : '')
@@ -443,6 +471,9 @@ export const register: Register = (on, options) => {
     }
     const bgTask = (t: Background) => `${t.kind}: ${t.label}`
     const idle = running.length || bg.length ? '' : ' · idle'
+    // The header keeps usage whole: the version goes first when fold, dot, title, usage and suffix overflow the body.
+    const header = (name: string) => 1 + (last ? 3 : 0) + displayWidth(` ${name} ── ${usageLine || 'usage unknown'}`) + displayWidth(folded ? (last ? ' · ' : '') : idle)
+    const title = header(fullTitle) > (e.props.bodyColumns ?? 60) ? 'model-ladder' : fullTitle
 
     const { project, repoRoot, config } = await loadConfig($, options)
     const guard = config.usageGuard ?? {}
@@ -461,7 +492,7 @@ export const register: Register = (on, options) => {
         <Box>
           {fold}
           {dot}
-          <Text bold> model-ladder </Text>
+          <Text bold> {title} </Text>
           {usageRun(`── ${usageLine || 'usage unknown'}${last ? ' · ' : ''}`)}
           {last && runs > 1 && <Text dimColor>{runs} runs · </Text>}
           {last && <Text>{last.cell} · {elapsed(last)} · {fit(rowTask(last), 30).trim()}</Text>}
@@ -508,7 +539,7 @@ export const register: Register = (on, options) => {
         <Box>
           {fold}
           {dot}
-          <Text bold> model-ladder </Text>
+          <Text bold> {title} </Text>
           {usageRun(`── ${usageLine || 'usage unknown'}${idle}`)}
         </Box>
         {withs.length > 0 && (

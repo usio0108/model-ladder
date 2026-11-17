@@ -1,7 +1,7 @@
 import '../helpers/isolate-home.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { addRow, finishRow, removeRow, anyRunning, runCount, isRedo, agentExpected, addBackground, removeBackground, backgroundRows, liveExpected, agentSamples, activityText } from '../../hooks/band/rows.mjs'
+import { addRow, finishRow, removeRow, anyRunning, runCount, isRedo, agentExpected, addBackground, removeBackground, backgroundRows, liveExpected, agentSamples, activityText, isWaitingAnswer, markAnswered } from '../../hooks/band/rows.mjs'
 
 const row = (id, run) => ({ id, run, role: 'worker', redo: false, cell: 'x', task: 't', status: 'running', ms: null, startedAt: 0 })
 
@@ -94,6 +94,28 @@ test('backgroundRows show only while Claude is not working and no agent runs', (
   assert.deepEqual(backgroundRows(list, false, true), [])
   assert.deepEqual(backgroundRows(list, true, true), [])
   assert.deepEqual(backgroundRows([], false, false), [])
+})
+
+test('a new question does not hide tasks of an earlier unfinished question; a final answer hides only its own question', () => {
+  const t = (id, question, answered = false) => ({ id, kind: 'shell', label: id, startedAt: 1, question, answered })
+  // Question 1 is still waiting (answered false); question 2 starts and its own task is added: both show.
+  let list = [t('a', 1), t('b', 2)]
+  assert.deepEqual(backgroundRows(list, false, false).map((x) => x.id), ['a', 'b'])
+  // Question 2 gets a final answer: only its task hides, question 1's keeps showing, and both stay tracked.
+  list = markAnswered(list, 2, true)
+  assert.deepEqual(backgroundRows(list, false, false).map((x) => x.id), ['a'])
+  assert.equal(list.length, 2)
+  // A task-notification waking question 2 shows its tasks again; its end removal still works on the hidden state.
+  assert.deepEqual(backgroundRows(markAnswered(list, 2, false), false, false).map((x) => x.id), ['a', 'b'])
+  assert.deepEqual(removeBackground(list, ['b']).map((x) => x.id), ['a'])
+  // Existing rules still hide everything.
+  assert.deepEqual(backgroundRows(list, true, false), [])
+  assert.deepEqual(backgroundRows(list, false, true), [])
+})
+
+test('isWaitingAnswer treats an empty, unreadable or waiting reply as waiting and a plain final answer as not', () => {
+  for (const waiting of ['', '  ', undefined, null, 42, 'The build is running in the background; I will check when it finishes.', 'Waiting for the tests.', '等測試跑完再回報', '已在背景啟動，完成後通知你']) assert.equal(isWaitingAnswer(waiting), true, String(waiting))
+  for (const final of ['Done: fixed the greeting and all tests pass.', '已修好，測試全部通過。']) assert.equal(isWaitingAnswer(final), false, final)
 })
 
 test('liveExpected: below expected is exact, 2+ longer samples give their median, otherwise the step rule is approximate', () => {

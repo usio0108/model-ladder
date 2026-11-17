@@ -237,6 +237,8 @@ test('no verify returns for user input, with the router proposal', async () => {
   assert.deepEqual(out.plan.acceptance, ['prints NT$ 1,234'])
   assert.match(out.plan.acceptanceMessage, /\*\*Acceptance criteria \(proposed\)\*\*\n1\. prints NT\$ 1,234\n\nTip: run \/model-ladder:create-verification-skill to generate \.claude\/skills\/verify\/;/)
   assert.equal(out.plan.acceptanceQuestion, 'Run with these criteria?')
+  assert.equal(out.plan.acceptanceStart, `${routed.model}/${routed.effort}`)
+  assert.equal(out.plan.startReason, routed.reason)
 })
 
 test('with a run lock, it returns after routing so the skill can claim the scope, then runs the plan', async () => {
@@ -546,6 +548,9 @@ test('skill instructions stay intact, stay in their role, and omit empty or unre
   assert.ok(calls[1].prompt.includes(`SKILL INSTRUCTIONS\n${verifier}\n\nInterpret these natural-language instructions`))
   assert.ok(!calls[1].prompt.includes(worker))
   assert.match(calls[0].prompt, /Evaluate each condition first, then select only the applicable relevant skills/)
+  assert.match(calls[0].prompt, /Every named capability whose condition applies is mandatory/)
+  assert.match(calls[0].prompt, /used is true only if you yourself invoked that capability during this attempt/)
+  assert.match(calls[0].prompt, /Rules injected by hooks \(SessionStart, SubagentStart\).*do NOT count/)
   const names = { skills: { worker: 'ponytail:ponytail, ui:ux', verifier: 'verify:review' } }
   const named = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }], names)
   assert.match(named.calls[0].prompt, /SKILL INSTRUCTIONS\nponytail:ponytail, ui:ux\n/)
@@ -693,20 +698,36 @@ test('the verify prompt with a verify command requires ACCEPTANCE and explains w
 
 const refused = 'Refusing to use C:\\repo\\.claude\\worktrees\\wf_1 as an isolation worktree: git could not be run to resolve it, so its git identity could not be verified. Isolation is refused rather than assumed — recreate the worktree (or remove the corrupt .git entry) and retry.'
 
-test('an isolation worktree refusal retries the worker once with the same model and effort, without diagnosis', async () => {
+test('an isolation worktree refusal reruns the worker once in a worktree it creates itself, without diagnosis', async () => {
   const { out, calls } = await runWith([
     { label: 'worker', throws: refused },
     { label: 'worker', result: done }, { label: 'verify', result: pass },
-  ])
+  ], { runId: 'claude-112533bb-c0fa', baseCommit: 'abc123' })
   assert.equal(out.status, 'VERIFIED')
   assert.equal(out.attempts.length, 1)
   assert.deepEqual(calls.map((c) => c.label.split(' ')[0]), ['worker', 'worker', 'verify'])
   assert.equal(`${calls[1].model}/${calls[1].effort}`, 'haiku/low')
-  assert.equal(calls[1].isolation, 'worktree')
+  assert.equal(calls[0].isolation, 'worktree')
+  assert.equal(calls[1].isolation, undefined, 'no host isolation after a refusal')
   assert.equal(calls[1].agentType, 'model-ladder:worker')
-  assert.equal(calls[1].prompt, calls[0].prompt)
+  assert.doesNotMatch(calls[0].prompt, /OWN WORKTREE/)
+  assert.match(calls[1].prompt, /OWN WORKTREE/)
+  assert.match(calls[1].prompt, /git -C "ROOT" worktree add --detach "ROOT\/\.claude\/worktrees\/ladder-112533bb-1" abc123/)
+  assert.doesNotMatch(calls[1].prompt, /git reset -q --hard/, 'an own worktree already starts at baseCommit')
   assert.equal(out.attempts[0].tokens, 30, 'both worker runs and the verifier count')
   assert.equal(out.tokens, 30)
+})
+
+test('after a refusal, later attempts create their own worktree without asking the host again', async () => {
+  const { calls } = await runWith([
+    { label: 'worker', throws: refused },
+    { label: 'worker', result: done }, { label: 'verify', result: fail },
+    { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
+    { label: 'worker', result: done }, { label: 'verify', result: pass },
+  ], { runId: 'claude-112533bb-c0fa', setupPatch: '/run/setup.patch' })
+  assert.equal(calls[4].isolation, undefined)
+  assert.match(calls[4].prompt, /ladder-112533bb-2/)
+  assert.match(calls[4].prompt, /SETUP \(do this first, in order, inside WT\)\n  git apply --whitespace=nowarn "\/run\/setup\.patch"/)
 })
 
 test('the refusal also retries a test-writer, and a refusal returned as text counts', async () => {
@@ -741,18 +762,29 @@ test('other worker errors are not retried', async () => {
   assert.deepEqual(calls.map((c) => c.label.split(' ')[0]), ['worker', 'diagnose', 'worker', 'verify'])
 })
 
-test('telemetry: the isolation retry is its own boundary and replays without respending', async () => {
-  let journal = [], out
-  for (const step of [{ label: 'worker', throws: refused }, { label: 'worker', result: done }, { label: 'verify', result: pass }]) {
-    const r = await runWith([step], { telemetry: true, journal })
-    assert.equal(r.calls.length, 1, 'one agent per Workflow call')
-    out = r.out; journal = out.journal
-  }
-  assert.equal(out.status, 'VERIFIED')
-  assert.deepEqual(journal.map((e) => e.phase), ['worker', 'worker', 'verify'])
-  assert.deepEqual(journal.map((e) => `${e.model}/${e.effort}`), ['haiku/low', 'haiku/low', 'haiku/low'])
-  assert.equal(out.attempts.length, 1)
-  assert.equal(out.tokens, 30)
+test('telemetry: a refused worktree is no boundary, so the own-worktree rerun runs in the same Workflow call', async () => {
+  const first = await runWith([{ label: 'worker', throws: refused }, { label: 'worker', result: done }], { telemetry: true, journal: [] })
+  assert.equal(first.out.status, 'BOUNDARY')
+  assert.equal(first.calls.length, 2, 'the refusal and the rerun share one call')
+  assert.equal(first.calls[1].isolation, undefined)
+  assert.deepEqual(first.out.journal.map((e) => e.phase), ['worker'], 'the refused agent is not journaled')
+  assert.equal(first.out.journal[0].measurement.result.status, 'done')
+  const second = await runWith([{ label: 'verify', result: pass }], { telemetry: true, journal: first.out.journal })
+  assert.equal(second.calls.length, 1, 'the worker replays without respending')
+  assert.equal(second.out.status, 'VERIFIED')
+  assert.deepEqual(second.out.journal.map((e) => e.phase), ['worker', 'verify'])
+  assert.equal(second.out.attempts.length, 1)
+})
+
+test('telemetry: a later live attempt after replay is refused again and falls back in its own call', async () => {
+  let r = await runWith([{ label: 'worker', throws: refused }, { label: 'worker', result: done }], { telemetry: true, journal: [], runId: 'claude-abcdef12-x' })
+  r = await runWith([{ label: 'verify', result: fail }], { telemetry: true, journal: r.out.journal, runId: 'claude-abcdef12-x' })
+  r = await runWith([{ label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') }], { telemetry: true, journal: r.out.journal, runId: 'claude-abcdef12-x' })
+  r = await runWith([{ label: 'worker', throws: refused }, { label: 'worker', result: done }], { telemetry: true, journal: r.out.journal, runId: 'claude-abcdef12-x' })
+  assert.equal(r.out.status, 'BOUNDARY')
+  assert.equal(r.calls[0].isolation, 'worktree')
+  assert.match(r.calls[1].prompt, /ladder-abcdef12-2/)
+  assert.deepEqual(r.out.journal.map((e) => e.phase), ['worker', 'verify', 'diagnose', 'worker'])
 })
 
 test('worker skills: the report lists each named capability, and an applicable, available one left unused fails the attempt', async () => {

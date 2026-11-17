@@ -10,7 +10,11 @@ import { artifactDir } from './common.mjs'
 export const START_MARKER = '# >>> model-ladder codex HUD >>>'
 export const END_MARKER = '# <<< model-ladder codex HUD <<<'
 // Subcommands and flags that are not an interactive session: the HUD has nothing to wrap, so codex runs untouched.
-export const PASSTHROUGH = ['exec', 'e', 'login', 'logout', 'mcp', 'mcp-server', 'app-server', 'apply', 'completion', 'debug', 'proto', 'help', '--help', '-h', '--version', '-V']
+export const PASSTHROUGH = ['exec', 'e', 'login', 'logout', 'mcp', 'mcp-server', 'app-server', 'apply', 'completion', 'debug', 'proto', 'help', '--help', '-h', '--version', '-V',
+  'plugin', 'review', 'update', 'doctor', 'queue', 'archive', 'delete', 'unarchive', 'migrate-rollouts', 'migrate-nfs-db', 'features', 'exec-server', 'remote-control', 'app', 'cloud', 'sandbox']
+const SEMVER = /^\d+\.\d+\.\d+$/
+// Files that must all exist for a plugin folder to be usable; a half-deleted cache folder fails this.
+const COMPLETE = ['.codex-plugin/plugin.json', 'scripts/codex-hud.mjs', 'hooks/band/remaining.mjs', 'node_modules/node-pty']
 const NPM_ARGS = ['ci', '--omit=dev', '--no-audit', '--no-fund']
 const LOCK_MS = 10 * 60 * 1000
 const OFF = ['0', 'false', 'off', 'no']
@@ -20,12 +24,25 @@ const psQuote = (text) => `'${String(text).replace(/'/g, "''")}'`
 
 export function hudBlock(pluginRoot) {
   const root = slash(pluginRoot).replace(/\/+$/, '')
+  const name = root.slice(root.lastIndexOf('/') + 1)
+  const parent = root.slice(0, root.lastIndexOf('/'))
+  // A Codex cache folder is <name>/<version>: scan its siblings on every run so an update never leaves a stale path.
+  const candidates = SEMVER.test(name) && parent
+    ? [
+      `  $candidates = @(Get-ChildItem -LiteralPath ${psQuote(parent)} -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\\d+\\.\\d+\\.\\d+$' } | Sort-Object { [version]$_.Name } -Descending | ForEach-Object { $_.FullName })`,
+    ]
+    : [`  $candidates = @(${psQuote(root)})`]
   return [
     START_MARKER,
     '# Managed by the model-ladder plugin and rewritten on every Codex session start. Set hudTakeover to false in',
     '# ~/.codex/model-ladder.json (or delete this block) to go back to plain codex.',
     'function codex {',
-    `  $root = ${psQuote(root)}`,
+    ...candidates,
+    '  $root = $null',
+    '  foreach ($candidate in $candidates) {',
+    `    $complete = $true; foreach ($part in @(${COMPLETE.map(psQuote).join(', ')})) { if (-not (Test-Path -LiteralPath "$candidate/$part")) { $complete = $false; break } }`,
+    '    if ($complete) { $root = $candidate; break }',
+    '  }',
     '  $exe = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Source -like \'*.exe\' } | Select-Object -First 1',
     '  if (-not $exe) {',
     '    $other = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1',
@@ -35,13 +52,13 @@ export function hudBlock(pluginRoot) {
     '  }',
     '  $plain = $env:MODEL_LADDER_HUD -eq \'1\' -or [Console]::IsInputRedirected -or [Console]::IsOutputRedirected -or $MyInvocation.ExpectingInput',
     `  if (-not $plain -and $args.Count -gt 0 -and @(${PASSTHROUGH.map(psQuote).join(', ')}) -contains [string]$args[0]) { $plain = $true }`,
-    '  if (-not $plain -and -not ((Test-Path -LiteralPath "$root/node_modules/node-pty") -and (Test-Path -LiteralPath "$root/scripts/codex-hud.mjs"))) { $plain = $true }',
+    '  if (-not $plain -and -not $root) { $plain = $true }',
     '  if (-not $plain -and -not (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)) { $plain = $true }',
     '  if ($plain) { & $exe.Source @args; return }',
     '  $previous = $env:CODEX_BINARY',
     '  $env:CODEX_BINARY = $exe.Source',
     '  try {',
-    `    node ${psQuote(`${root}/scripts/codex-hud.mjs`)} --cwd (Get-Location).Path -- @args`,
+    '    node "$root/scripts/codex-hud.mjs" --cwd (Get-Location).Path -- @args',
     '  } finally {',
     '    if ($null -eq $previous) { Remove-Item Env:CODEX_BINARY -ErrorAction SilentlyContinue } else { $env:CODEX_BINARY = $previous }',
     '  }',
