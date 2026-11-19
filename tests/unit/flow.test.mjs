@@ -41,7 +41,7 @@ function harness(steps) {
 
 async function call(steps, extra = {}) {
   const h = harness(steps)
-  const out = await body({ task: 't', config, protection, ...extra }, h.agent, h.budget, () => {}, () => {})
+  const out = await body({ task: 't', config, protection, candidateCommand: 'node finish.mjs --candidate run', ...extra }, h.agent, h.budget, () => {}, () => {})
   assert.deepEqual(h.rest, [], 'unused scripted steps')
   return { out, calls: h.calls }
 }
@@ -52,19 +52,29 @@ const plan = {
 }
 const runWith = (steps, extra = {}) => call(steps, { plan, ...extra })
 const done = { status: 'done', worktreePath: '/wt', filesChanged: ['a.py'], summary: 's', selfCheck: '', blockedReason: null }
-const pass = { pass: true, reason: 'ok', output: '', workerFiles: ['a.py'] }
+const pass = { pass: true, reason: 'ok', output: '', workerFiles: ['a.py'], candidateTree: 'a'.repeat(40) }
 const fail = { pass: false, reason: 'tests fail', output: 'E assert', workerFiles: ['a.py'] }
 const diag = (action, model, effort) => ({ action, model, effort, reason: 'r', hint: 'h' })
 
 test('passes on the first attempt', async () => {
   const { out, calls } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }])
-  assert.equal(out.status, 'VERIFIED')
-  assert.deepEqual(out.winner, { worktreePath: '/wt', filesChanged: ['a.py'], summary: 's' })
+  assert.equal(out.status, 'CANDIDATE')
+  assert.deepEqual(out.winner, { worktreePath: '/wt', filesChanged: ['a.py'], summary: 's', candidateTree: pass.candidateTree })
   assert.equal(out.attempts.length, 1)
   assert.equal(calls[0].model, 'haiku')
   assert.equal(calls[0].isolation, 'worktree')
   assert.equal(calls[0].agentType, 'model-ladder:worker')
   assert.equal(out.tokens, 20)
+})
+
+test('a passing verdict without a candidate tree cannot reach Finish as a candidate', async () => {
+  const { out } = await runWith([
+    { label: 'worker', result: done }, { label: 'verify', result: { ...pass, candidateTree: null } },
+    { label: 'final diagnosis', result: { reason: 'missing evidence', suggestion: 'retry' } },
+  ], { config: { ...config, maxAttempts: 1 } })
+  assert.equal(out.status, 'FAILED')
+  assert.equal(out.winner, null)
+  assert.match(out.attempts[0].reason, /candidate evidence is missing/)
 })
 
 test('a verify command is checked by the cheap verifier; acceptance-only by the router model', async () => {
@@ -85,7 +95,7 @@ test('follows a legal router choice and carries the hint forward', async () => {
     { label: 'diagnose', result: diag('raise_model', 'sonnet', 'medium') },
     { label: 'worker', result: done }, { label: 'verify', result: pass },
   ])
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(calls[3].model, 'sonnet')
   assert.equal(calls[3].effort, 'medium')
   assert.match(calls[3].prompt, /HINT\n {2}h/)
@@ -135,7 +145,7 @@ test('without a verify command an empty diff is a read-only report the verifier 
     [{ label: 'worker', result: { ...done, filesChanged: [], summary: 'the report' } }, { label: 'verify', result: pass }],
     { plan: { ...plan, verify: null } },
   )
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(out.winner.summary, 'the report')
   assert.match(calls[1].prompt, /read-only/)
 })
@@ -146,7 +156,7 @@ test('a read-only plan runs the worker in the user checkout, without a worktree 
     [{ label: 'worker', result: { ...done, filesChanged: [], summary: 'the report' } }, { label: 'verify', result: pass }],
     { plan: ro, baseCommit: 'abc' },
   )
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(calls[0].isolation, undefined)
   assert.match(calls[0].prompt, /READ-ONLY/)
   assert.doesNotMatch(calls[0].prompt, /reset/)
@@ -204,7 +214,7 @@ const routeOnly = (r, extra) => call([{ label: 'route', result: r }], extra)
 
 test('one call routes and runs', async () => {
   const { out, calls } = await routeThenPass(routed)
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(out.plan.start, 'sonnet/medium')
   assert.equal(`${calls[1].model}/${calls[1].effort}`, 'sonnet/medium')
   assert.match(calls[1].prompt, /\*\*\/tests\/\*\*/)
@@ -247,7 +257,7 @@ test('with a run lock, it returns after routing so the skill can claim the scope
   assert.deepEqual(out.plan.scope, ['shop/cart.py'])
   assert.equal(out.plan.readOnly, false)
   const second = await call([{ label: 'worker', result: done }, { label: 'verify', result: pass }], { runId: 'claude-1', plan: out.plan })
-  assert.equal(second.out.status, 'VERIFIED')
+  assert.equal(second.out.status, 'CANDIDATE')
 })
 
 test('a vague task returns the router question', async () => {
@@ -271,28 +281,28 @@ test('a small task in a large session comes back DIRECT, before any worker', asy
 })
 
 test('a small task in a small session, or a large task anywhere, still runs the ladder', async () => {
-  assert.equal((await routeThenPass({ ...routed, small: true }, { contextTokens: 50000 })).out.status, 'VERIFIED')
-  assert.equal((await routeThenPass({ ...routed, small: false }, { contextTokens: 400000 })).out.status, 'VERIFIED')
-  assert.equal((await routeThenPass({ ...routed, small: true })).out.status, 'VERIFIED')
+  assert.equal((await routeThenPass({ ...routed, small: true }, { contextTokens: 50000 })).out.status, 'CANDIDATE')
+  assert.equal((await routeThenPass({ ...routed, small: false }, { contextTokens: 400000 })).out.status, 'CANDIDATE')
+  assert.equal((await routeThenPass({ ...routed, small: true })).out.status, 'CANDIDATE')
 })
 
 test('DIRECT is a percentage of the context window: boundary, off, missing window', async () => {
-  const run = async (extra) => ((await routeOnly({ ...routed, small: true }, extra)).out.status === 'DIRECT' ? 'DIRECT' : 'VERIFIED')
+  const run = async (extra) => ((await routeOnly({ ...routed, small: true }, extra)).out.status === 'DIRECT' ? 'DIRECT' : 'CANDIDATE')
   assert.equal(await run({ contextTokens: 60000, contextWindow: 200000 }), 'DIRECT')
-  assert.equal(await run({ contextTokens: 59999, contextWindow: 200000 }), 'VERIFIED')
+  assert.equal(await run({ contextTokens: 59999, contextWindow: 200000 }), 'CANDIDATE')
   assert.equal(await run({ contextTokens: 300000, contextWindow: 1000000, directThreshold: 30 }), 'DIRECT')
-  assert.equal(await run({ contextTokens: 299999, contextWindow: 1000000, directThreshold: 30 }), 'VERIFIED')
-  assert.equal(await run({ contextTokens: 100000, contextWindow: 200000, directThreshold: 60 }), 'VERIFIED')
+  assert.equal(await run({ contextTokens: 299999, contextWindow: 1000000, directThreshold: 30 }), 'CANDIDATE')
+  assert.equal(await run({ contextTokens: 100000, contextWindow: 200000, directThreshold: 60 }), 'CANDIDATE')
   assert.equal(await run({ contextTokens: 120000, contextWindow: 200000, directThreshold: 60 }), 'DIRECT')
-  assert.equal(await run({ contextTokens: 900000, contextWindow: 1000000, directThreshold: 'off' }), 'VERIFIED')
+  assert.equal(await run({ contextTokens: 900000, contextWindow: 1000000, directThreshold: 'off' }), 'CANDIDATE')
   assert.equal(await run({ contextTokens: 60000 }), 'DIRECT')
-  assert.equal(await run({ contextTokens: 59000 }), 'VERIFIED')
-  assert.equal((await routeOnly({ ...routed, small: false }, { contextTokens: 190000, contextWindow: 200000 })).out.status === 'DIRECT' ? 'DIRECT' : 'VERIFIED', 'VERIFIED')
+  assert.equal(await run({ contextTokens: 59000 }), 'CANDIDATE')
+  assert.equal((await routeOnly({ ...routed, small: false }, { contextTokens: 190000, contextWindow: 200000 })).out.status === 'DIRECT' ? 'DIRECT' : 'CANDIDATE', 'CANDIDATE')
 })
 
 test('forceLadder overrides DIRECT', async () => {
   const { out } = await routeThenPass({ ...routed, small: true }, { contextTokens: 400000, forceLadder: true })
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
 })
 
 const parts = [{ task: 'part one', scope: ['a.py'] }, { task: 'part two', scope: ['b.py'] }]
@@ -318,7 +328,7 @@ test('the plan carries the router\'s worker and verify minutes', async () => {
 })
 
 test('long tasks proceed and still require clarification or acceptance when needed', async () => {
-  assert.equal((await routeThenPass(long)).out.status, 'VERIFIED')
+  assert.equal((await routeThenPass(long)).out.status, 'CANDIDATE')
   const asked = await splitStatus({ ...long, question: 'Better how?' })
   assert.equal(asked.status, 'NEEDS_INPUT')
   assert.equal(asked.plan.question, 'Better how?')
@@ -336,7 +346,7 @@ test('telemetry executes one agent per host boundary and replays without respend
   assert.equal(first.out.status, 'BOUNDARY')
   assert.equal(first.out.journal.length, 2)
   const second = await call([{ label: 'verify', result: pass }], { telemetry: true, runId: 'claude-test', plan: r.out.plan, journal: first.out.journal })
-  assert.equal(second.out.status, 'VERIFIED')
+  assert.equal(second.out.status, 'CANDIDATE')
   assert.equal(second.out.tokens, 30)
   assert.deepEqual(second.out.journal.map((e) => e.phase), ['route', 'worker', 'verify'])
   assert.deepEqual(second.out.journal.map((e) => e.measurement.tokens), [10, 10, 10])
@@ -352,7 +362,7 @@ test('telemetry replay covers failed verification, diagnosis and an escalated wo
     out = r.out; journal = out.journal
     assert.equal(r.calls.length, 1)
   }
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(out.tokens, 50)
   assert.equal(out.attempts.length, 2)
   assert.equal(journal[3].effort, 'medium')
@@ -369,14 +379,14 @@ const live = (enabled, usage, threshold = 90) => JSON.stringify({ enabled, thres
 test('without a usage command the verifier prompt and schema are unchanged', async () => {
   const { calls } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }])
   assert.doesNotMatch(calls[1].prompt, /usage/)
-  assert.deepEqual(calls[1].schema.required, ['pass', 'reason', 'output', 'workerFiles'])
+  assert.deepEqual(calls[1].schema.required, ['pass', 'reason', 'output', 'workerFiles', 'candidateTree'])
   assert.equal('usage' in calls[1].schema.properties, false)
 })
 
 test('the verifier runs the usage command last and must report its output', async () => {
   const { calls } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: { ...pass, usage: live(true, 10) } }], { usageGuard })
   assert.ok(calls[1].prompt.trimEnd().endsWith(`run \`${usageGuard.command}\` and put its output unchanged in the usage field.`))
-  assert.deepEqual(calls[1].schema.required, ['pass', 'reason', 'output', 'workerFiles', 'usage'])
+  assert.deepEqual(calls[1].schema.required, ['pass', 'reason', 'output', 'workerFiles', 'candidateTree', 'usage'])
   assert.deepEqual(calls[1].schema.properties.usage, { type: 'string' })
 })
 
@@ -396,13 +406,13 @@ test('guard on: below the threshold, unknown or unreadable usage keeps escalatin
       { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
       { label: 'worker', result: done }, { label: 'verify', result: { ...pass, usage } },
     ], { usageGuard })
-    assert.equal(out.status, 'VERIFIED', usage)
+    assert.equal(out.status, 'CANDIDATE', usage)
   }
 })
 
-test('guard on: a passing attempt is VERIFIED even above the threshold', async () => {
+test('guard on: a passing attempt is a CANDIDATE even above the threshold', async () => {
   const { out } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: { ...pass, usage: live(true, 99) } }], { usageGuard })
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
 })
 
 test('guard turned off mid-run: high usage never stops the run', async () => {
@@ -413,7 +423,7 @@ test('guard turned off mid-run: high usage never stops the run', async () => {
     { label: 'diagnose', result: diag('raise_model', 'sonnet', 'low') },
     { label: 'worker', result: done }, { label: 'verify', result: { ...pass, usage: live(false, 100) } },
   ], { usageGuard })
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(out.attempts.length, 3)
 })
 
@@ -516,7 +526,7 @@ test('a worker that comes back with other text instead of a report is a failed a
     { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
     { label: 'worker', result: done }, { label: 'verify', result: pass },
   ])
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(out.attempts[0].reason, 'worker returned no report: I could not finish')
 })
 
@@ -526,7 +536,7 @@ test('an ordinary agent failure is not a hard limit and still escalates', async 
     { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
     { label: 'worker', result: done }, { label: 'verify', result: pass },
   ])
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
 })
 
 test('hardLimit recognizes subscription limit messages and their reset time', () => {
@@ -627,12 +637,12 @@ test('a forecast short on usage asks before any worker, with window, used %, nee
 test('acceptUsageRisk true runs the ladder; later continuations of the run never ask again', async () => {
   const forecast = routedForecast(85, [10])
   const { out, calls } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }], { runId: 'claude-1', forecast, acceptUsageRisk: true })
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.deepEqual(calls.map((c) => c.label.split(' ')[0]), ['worker', 'verify'])
   const first = await runWith([{ label: 'worker', result: done }], { runId: 'claude-1', forecast, acceptUsageRisk: true, telemetry: true, journal: [] })
   assert.equal(first.out.status, 'BOUNDARY')
   const second = await runWith([{ label: 'verify', result: pass }], { runId: 'claude-1', forecast, telemetry: true, journal: first.out.journal })
-  assert.equal(second.out.status, 'VERIFIED')
+  assert.equal(second.out.status, 'CANDIDATE')
 })
 
 test('sufficient, unknown or missing usage data never asks', async () => {
@@ -642,7 +652,7 @@ test('sufficient, unknown or missing usage data never asks', async () => {
   assert.deepEqual(forecasts.slice(0, 3).map((f) => f.current.usage.five_hour.status), ['sufficient', 'unknown', 'unknown'])
   for (const forecast of forecasts) {
     const { out } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }], { runId: 'claude-1', forecast })
-    assert.equal(out.status, 'VERIFIED')
+    assert.equal(out.status, 'CANDIDATE')
   }
 })
 
@@ -676,7 +686,7 @@ test('a passing verdict with empty workerFiles fails as an empty worktree and es
     { label: 'diagnose', result: diag('raise_model', 'sonnet', 'medium') },
     { label: 'worker', result: done }, { label: 'verify', result: pass },
   ])
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(out.attempts.length, 2)
   assert.equal(out.attempts[0].reason, 'worker changed nothing (verifier saw no unstaged or untracked changes)')
   assert.equal(out.attempts[0].action, 'raise_model')
@@ -685,7 +695,7 @@ test('a passing verdict with empty workerFiles fails as an empty worktree and es
 
 test('a passing verdict with workerFiles verifies', async () => {
   const { out } = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: { ...pass, workerFiles: ['a.py', 'new.py'] } }])
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(out.attempts.length, 1)
 })
 
@@ -703,7 +713,7 @@ test('an isolation worktree refusal reruns the worker once in a worktree it crea
     { label: 'worker', throws: refused },
     { label: 'worker', result: done }, { label: 'verify', result: pass },
   ], { runId: 'claude-112533bb-c0fa', baseCommit: 'abc123' })
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(out.attempts.length, 1)
   assert.deepEqual(calls.map((c) => c.label.split(' ')[0]), ['worker', 'worker', 'verify'])
   assert.equal(`${calls[1].model}/${calls[1].effort}`, 'haiku/low')
@@ -735,7 +745,7 @@ test('the refusal also retries a test-writer, and a refusal returned as text cou
     { label: 'worker', result: refused },
     { label: 'worker', result: done }, { label: 'verify', result: pass },
   ], { plan: { ...plan, allowTests: true } })
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.deepEqual(calls.map((c) => c.agentType), ['model-ladder:test-writer', 'model-ladder:test-writer', 'model-ladder:verifier'])
 })
 
@@ -746,7 +756,7 @@ test('a refusal that repeats gets only one retry, then the usual failure handlin
     { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
     { label: 'worker', result: done }, { label: 'verify', result: pass },
   ])
-  assert.equal(out.status, 'VERIFIED')
+  assert.equal(out.status, 'CANDIDATE')
   assert.equal(out.attempts.length, 2)
   assert.match(out.attempts[0].reason, /^worker failed: Refusing to use/)
   assert.equal(out.attempts[0].action, 'raise_effort')
@@ -771,7 +781,7 @@ test('telemetry: a refused worktree is no boundary, so the own-worktree rerun ru
   assert.equal(first.out.journal[0].measurement.result.status, 'done')
   const second = await runWith([{ label: 'verify', result: pass }], { telemetry: true, journal: first.out.journal })
   assert.equal(second.calls.length, 1, 'the worker replays without respending')
-  assert.equal(second.out.status, 'VERIFIED')
+  assert.equal(second.out.status, 'CANDIDATE')
   assert.deepEqual(second.out.journal.map((e) => e.phase), ['worker', 'verify'])
   assert.equal(second.out.attempts.length, 1)
 })
@@ -792,7 +802,7 @@ test('worker skills: the report lists each named capability, and an applicable, 
   const report = (s) => ({ ...done, skills: [{ name: 'ponytail', applies: true, available: true, note: 'n', ...s }] })
   // Used: the verifier runs, and the result carries the report.
   const used = await runWith([{ label: 'worker', result: report({ used: true }) }, { label: 'verify', result: pass }], { skills })
-  assert.equal(used.out.status, 'VERIFIED')
+  assert.equal(used.out.status, 'CANDIDATE')
   assert.ok(used.calls[0].schema.required.includes('skills'))
   assert.match(used.calls[0].prompt, /In the skills field of your report/)
   assert.deepEqual(used.out.attempts[0].skills.map((s) => s.used), [true])
@@ -804,7 +814,7 @@ test('worker skills: the report lists each named capability, and an applicable, 
   // Not found here, or not applicable: a reported blocker, not a skip.
   for (const s of [{ used: false, available: false }, { used: false, applies: false }]) {
     const r = await runWith([{ label: 'worker', result: report(s) }, { label: 'verify', result: pass }], { skills })
-    assert.equal(r.out.status, 'VERIFIED')
+    assert.equal(r.out.status, 'CANDIDATE')
   }
   // No worker instructions: the schema asks for no report.
   const none = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }])

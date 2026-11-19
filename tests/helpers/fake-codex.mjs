@@ -2,6 +2,19 @@ import assert from 'node:assert/strict'
 import { appendFileSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { join, basename } from 'node:path'
 const [root, ...args] = process.argv.slice(2)
+const scenario = JSON.parse(readFileSync(join(root, 'scenario.json'), 'utf8'))
+if (args[0] === 'sandbox' && scenario.simulateSandbox) {
+  // Transport double for profile sequencing. Native enforcement is covered by the smoke fixture.
+  const [, , , , cwd, , , marker, command] = args.slice(args.indexOf('--') + 1)
+  console.log(marker + ' ' + JSON.stringify({ read: 'EACCES', write: 'EPERM', network: 'ECONNREFUSED' }))
+  console.log(marker + ' ready')
+  if (command !== undefined) {
+    assert.equal(command, 'node --test tests/check.test.mjs')
+    const { spawnSync } = await import('node:child_process')
+    process.exitCode = spawnSync(process.execPath, ['--test', 'tests/check.test.mjs'], { cwd, stdio: 'inherit' }).status
+  }
+  process.exit()
+}
 let prompt = ''
 for await (const data of process.stdin) prompt += data
 assert.equal(args[0], 'exec')
@@ -20,7 +33,6 @@ assert.ok(args.includes('--json'))
 assert.equal(args.at(-1), '-')
 assert.match(arg('-c'), /^model_reasoning_effort=/)
 assert.ok(['read-only', 'workspace-write'].includes(arg('--sandbox')))
-const scenario = JSON.parse(readFileSync(join(root, 'scenario.json'), 'utf8'))
 const log = join(root, '.model-ladder', 'fake-calls.jsonl')
 mkdirSync(join(root, '.model-ladder'), {recursive:true})
 // What Codex would hand its sandboxed shell commands through shell_environment_policy.set.

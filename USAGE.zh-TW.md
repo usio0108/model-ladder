@@ -4,6 +4,8 @@
 
 ## 執行報告
 
+Local Fast Path 的 check 會回報 `VERIFIED`、`FAILED`、`CONFLICT`（驗證期間 checkout 被修改）、`INCONCLUSIVE` 或 `BLOCKED`；任務需要 ladder 時，`begin` 會回報 `NOT_ELIGIBLE`。`node scripts/telemetry.mjs [--json]` 不呼叫模型即可彙總 history，請見 [passive telemetry](docs/telemetry/passive-telemetry.md)。`node scripts/ci-evidence.mjs ci --ref <sha> --branch <base> [--local VERIFIED]` 讀取 GitHub CI；讀不到的 CI 是 `UNKNOWN`，只有本機 `VERIFIED` 加上 CI `PASS` 才算可交付。
+
 報告會用 session 的語言整理任務、嘗試、修改檔案、驗證與剩餘限制。
 
 | 結果 | 意義 |
@@ -18,6 +20,24 @@
 
 Claude 用量停止回傳 `USAGE_LIMIT`；Codex 回傳 `STOPPED` 與 `errorCode: "USAGE_LIMIT"`。
 執行歷史存於 `.model-ladder/history.jsonl`。
+
+### Codex 驗證證據
+
+在 runner 結果或歷史紀錄中查找 `evidence.version: 1`。執行層級記錄 Git 基準 commit 與 tree。Worker 產生快照後，`attempts[].evidence` 記錄候選 tree ID 與變更路徑。`command` 記錄檢查來源與觀測到的退出碼。`review` 記錄覆核模型、推理強度與判定。`SKIPPED` 附有原因。`INCONCLUSIVE` 表示檢查中斷、無法執行或未取得判定。缺少依賴時，shell 可能回傳非零退出碼，但測試本身尚未執行。
+
+以嘗試的 `pass` 和執行結果的 `status`、`outcome` 判斷是否可交付。個別命令或覆核通過後，快照完整性檢查仍可能拒絕該次嘗試。舊紀錄和擷取基準前就停止的執行可能沒有 `evidence`。
+
+證據欄位省略命令文字、程序輸出與模型評論。既有欄位與原始角色日誌可能含敏感資料，分享前請先檢查。
+
+### 要求原生驗證 Sandbox
+
+在 Codex runner 的 JSON 輸入設定 `requireVerificationSandbox: true`。若要要求從可信 shell 啟動的所有執行都使用隔離，在該 shell 設定 `MODEL_LADDER_REQUIRE_VERIFICATION_SANDBOX=1`。如果原本的執行要求隔離，使用 `directRun` 或 `resumeRun` 時也要保留此設定。
+
+此模式需要已設定或可探索的確定性驗證命令，以及支援原生權限 profile 的 Codex CLI。Runner 在路由前及驗證命令啟動前，探測外部檔案與正在監聽的主機 loopback。`SANDBOX_UNAVAILABLE` 表示無法建立 sandbox 或完成對照。`SANDBOX_ENFORCEMENT_FAILED` 表示已進入探測，但未證明所需的阻擋。`SANDBOX_VERIFIED` 表示回報階段的對照與探測成功。`HOST_UNSANDBOXED` 標示主機 shell 命令。原生路徑只傳遞允許的環境變數、停用網路，也不借用主 checkout 的虛擬環境。
+
+可信的低風險檢查預設仍使用主機 shell，繼承 runner 的環境與存取權限。Worktree 提供獨立的 checkout。新 sandbox 政策只涵蓋要求隔離的確定性命令。Codex 角色、Git 操作與 Claude 驗證沿用各自的執行邊界。
+
+`TERMINATION_FAILED` 表示程序樹可能仍在執行。先查核回報的 PID 與保留的證據，再清除鎖或重用 worktree。Runner 不會自動重跑，也不會寫入聲稱停止成功的 handoff。
 
 沒有既有驗證命令或 skill 時，提供明確驗收條件，或使用 `create-verification-skill` 與 `maintain-verification-skill`。
 Claude 產生 `.claude/skills/verify/`；Codex 產生 `.agents/skills/verify/`，也接受 Claude 路徑。

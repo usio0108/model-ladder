@@ -5,6 +5,10 @@ description: Run a task through the model-ladder plugin in Codex. Choose a cheap
 
 # model-ladder
 
+An explicit Execution v2 contract file uses the packaged `codex-run.mjs --input <file>` directly. Pass the file unchanged. `BLOCKED` and `REVIEW_REQUIRED` are final waiting results for that invocation. Legacy task text and legacy `DIRECT` continuations use the workflow below.
+
+Local fast path, tried first unless forceLadder is requested: when you can already name the one existing file the task changes and the project's verify command fully checks the outcome, write `{"contract":{"version":1,"id":"<short-id>","task":"<task>","repository":"<repo root>","backend":"codex","scope":["<file>"],"coverage":"complete","complexity":"small"}}` to a UTF-8 file under artifactDir(targetRoot) as in step 4, and run the packaged `scripts/fast-path.mjs begin --input <file>`. It starts no model call. `READY` means edit only that file in this checkout, never protected paths, do not run the verify command, then run `fast-path.mjs check --run <runId>`. `NOT_ELIGIBLE` or `BLOCKED` from begin changed nothing: continue with the runner below. From check, `VERIFIED` means report the file and that remote CI is unverified; `FAILED` allows one repair in the same file and one more check, after which report the reason and that the unverified edit remains in the checkout; `CONFLICT` means run check once more; `BLOCKED` or `INCONCLUSIVE` means report errorCode and message. The fast path never commits or pushes.
+
 Run the user's task through the Codex runner. Implement it yourself only when the runner returns DIRECT, using the isolated draft and independent verification flow below.
 
 1. Locate this SKILL.md on disk using the skill path supplied by Codex. Resolve ../../scripts/codex-run.mjs relative to its containing directory. Do not use CLAUDE_PLUGIN_ROOT or a guessed installation path.

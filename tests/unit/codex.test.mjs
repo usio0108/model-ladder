@@ -9,7 +9,7 @@ import { test, after } from 'node:test'
 import { runLadder, loadConfig, discoverVerify, readInput, resolveModel } from '../../scripts/codex-run.mjs'
 import { SCHEMAS, validate, environmentFailure, usageLimitFailure } from '../../scripts/codex-exec.mjs'
 import { artifactDir, pruneRuns } from '../../scripts/common.mjs'
-import { activeRuns, registerRun, unregisterRun } from '../../scripts/usage-guard.mjs'
+import { activeDir, activeRuns, forceStopRuns, registerRun, unregisterRun } from '../../scripts/usage-guard.mjs'
 
 const dirs = [], repos = []
 // The usage guard is on by default: point it at an empty Codex home so this machine's real usage never decides a test.
@@ -47,6 +47,10 @@ function fixture(scenario = {}, overrides = {}) {
   return dir
 }
 const run = (cwd, input = {}, extra = {}) => runLadder({ task: 'Fix greeting typo', ...input }, { cwd, executable: { command: process.execPath, prefixArgs: [fake, cwd] }, ...extra })
+const runV2 = (cwd, overrides = {}, options = {}, input = {}) => runLadder({ ...input, contract: {
+  version: 1, id: 'greeting-fix', repository: cwd, task: 'Fix greeting typo', scope: ['greeting.mjs'],
+  acceptance: ['Greeting is Welcome'], coverage: 'complete', complexity: 'small', ...overrides,
+} }, { cwd, executable: { command: process.execPath, prefixArgs: [fake, cwd] }, ...options })
 const calls = (dir) => read(dir, '.model-ladder/fake-calls.jsonl').trim().split('\n').map(JSON.parse)
 const cleaned = (dir) => { assert.equal(existsSync(join(dir, '.model-ladder/run.json')), false); assert.deepEqual(existsSync(join(dir, '.model-ladder/runs')) ? readdirSync(join(dir, '.model-ladder/runs')).filter((f) => f.endsWith('.json')) : [], []); assert.equal(git(dir, 'worktree', 'list', '--porcelain').match(/^worktree /gm).length, 1) }
 
@@ -101,6 +105,15 @@ test('first pass applies incremental changes, ignores benign stderr, records usa
   assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
   assert.equal(result.outcome.applied, true)
   assert.deepEqual(result.outcome.files, ['greeting.mjs', 'new-file.txt'])
+  assert.deepEqual(result.evidence, { version: 1, backend: 'codex', baseCommit: git(dir, 'rev-parse', 'HEAD'), baseTree: index })
+  const evidence = result.attempts[0].evidence
+  assert.equal(git(dir, 'cat-file', '-t', evidence.candidateTree), 'tree')
+  assert.deepEqual(evidence.files, result.outcome.files)
+  assert.deepEqual(evidence.command, { source: 'CONFIG', status: 'PASSED', reason: null, exitCode: 0, sandbox: 'HOST_UNSANDBOXED' })
+  assert.deepEqual(result.verificationSandbox, { status: 'HOST_UNSANDBOXED', stage: 'command' })
+  assert.deepEqual(evidence.review, { model: 'cheap', effort: 'low', status: 'PASSED', reason: null })
+  const history = JSON.parse(read(dir, '.model-ladder/history.jsonl').trim())
+  assert.deepEqual(history.attempts[0].evidence, evidence)
   assert.match(read(dir, 'greeting.mjs'), /Welcome/)
   assert.equal(git(dir, 'write-tree'), index)
   assert.equal(result.usage[0].turns[0].output_tokens, 5)
@@ -119,6 +132,222 @@ test('Codex worker prompt carries the editing rules', async () => {
   assert.match(prompt, /`uv run`/)
   assert.match(prompt, /\.venv, uv\.lock/)
   assert.match(prompt, /git status --porcelain --untracked-files=all/)
+})
+
+test('v2 DIRECT uses one native worker and deterministic evidence', async () => {
+  const dir = fixture()
+  const result = await runV2(dir)
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  assert.equal(result.contract.profile, 'DIRECT')
+  assert.equal(result.contract.risk, 'LOW')
+  assert.equal(result.contract.status, 'VERIFIED')
+  assert.deepEqual(calls(dir).map(({ phase }) => phase), ['worker'])
+  assert.match(calls(dir)[0].prompt, /runner captures the Git snapshot and changed paths/)
+  assert.doesNotMatch(calls(dir)[0].prompt, /git status --porcelain/)
+  assert.equal(result.attempts[0].evidence.command.exitCode, 0)
+  assert.deepEqual(result.attempts[0].evidence.workerBoundary, { requestedMode: 'workspace-write', toolNetworkRequested: false, approvalPolicy: 'never', enforcement: 'UNVERIFIED' })
+  assert.equal(result.attempts[0].evidence.command.sandbox, 'HOST_UNSANDBOXED')
+  assert.equal(result.attempts[0].evidence.review.reason, 'DETERMINISTIC_COVERAGE')
+  assert.equal(result.telemetry.router.calls, 0)
+  assert.equal(result.telemetry.router.inputTokens, 'UNKNOWN')
+  assert.equal(result.telemetry.total.inputTokens, 20)
+  assert.equal(result.telemetry.total.cachedInputTokens, 'UNKNOWN')
+  assert.deepEqual(result.delivery, { status: 'LOCAL_APPLIED', ci: 'UNVERIFIED' })
+  assert.ok(existsSync(result.contract.evidenceRefs[0]))
+  assert.match(read(dir, 'greeting.mjs'), /Welcome/)
+  cleaned(dir)
+})
+
+test('v2 MANAGED requires criteria and reviews only when coverage or complexity calls for it', async () => {
+  const dir = fixture()
+  const missing = await runV2(dir, { profile: 'MANAGED', acceptance: [] })
+  assert.equal(missing.status, 'BLOCKED')
+  assert.equal(missing.errorCode, 'ACCEPTANCE_REQUIRED')
+  assert.equal(existsSync(join(dir, '.model-ladder/fake-calls.jsonl')), false)
+  const result = await runV2(dir, { coverage: 'partial' })
+  assert.equal(result.contract.profile, 'MANAGED')
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  assert.deepEqual(calls(dir).map(({ phase }) => phase), ['worker', 'verify'])
+  assert.match(calls(dir).at(-1).prompt, /CANDIDATE DIFF\ndiff --git a\/greeting\.mjs b\/greeting\.mjs/)
+  assert.match(calls(dir).at(-1).prompt, /\+export default "Welcome"/)
+  assert.equal(result.attempts[0].evidence.review.status, 'PASSED')
+  assert.equal(result.telemetry.verifier.calls, 1)
+  cleaned(dir)
+})
+
+test('v2 MANAGED repairs the scoped candidate without escalation or review over a failed gate', async () => {
+  const dir = fixture({ failFirst: true, expectWorkerFiles: { 'greeting.mjs': 'export default "Wrong"\n' } })
+  const result = await runV2(dir, { profile: 'MANAGED' })
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  assert.deepEqual(calls(dir).map(({ phase, model }) => [phase, model]), [['worker', 'cheap'], ['worker', 'cheap']])
+  assert.equal(result.attempts[0].failure, 'TEST_FAILURE')
+  assert.equal(result.attempts[0].evidence.review.status, 'SKIPPED')
+  assert.equal(result.telemetry.retry.calls, 1)
+  assert.equal(result.telemetry.retry.outputTokens, 5)
+  cleaned(dir)
+})
+
+test('v2 stops repeated mandatory failures and does not ask a verifier', async () => {
+  const dir = fixture({ alwaysFail: true })
+  const result = await runV2(dir, { profile: 'MANAGED', coverage: 'partial', limits: { maxAttempts: 3 } })
+  assert.equal(result.status, 'FAILED', JSON.stringify(result))
+  assert.deepEqual(calls(dir).map(({ phase }) => phase), ['worker', 'worker'])
+  assert.equal(result.attempts[1].failure, 'REPEATED_FAILURE')
+  assert.ok(existsSync(result.worktreePath))
+  assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
+})
+
+test('v2 rejects protected and out-of-scope changes before any check', async () => {
+  for (const [scenario, reason] of [[{ tamper: 'tests' }, /Modified protected file/], [{ newUntracked: true }, /Contract forbids changes/]]) {
+    const dir = fixture(scenario)
+    const result = await runV2(dir)
+    assert.equal(result.status, 'FAILED', JSON.stringify(result))
+    assert.match(result.attempts[0].reason, reason)
+    assert.equal(result.attempts[0].evidence.command.status, 'SKIPPED')
+    assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
+    cleaned(dir)
+  }
+})
+
+test('v2 does not mark changed verification snapshots or missing verdicts verified', async () => {
+  for (const [scenario, status] of [[{ verifyFiles: { 'greeting.mjs': 'modified by review' } }, 'FAILED'], [{ badOutput: 'verify' }, 'INCONCLUSIVE']]) {
+    const dir = fixture(scenario)
+    const result = await runV2(dir, { coverage: 'partial' })
+    assert.equal(result.status, status, JSON.stringify(result))
+    assert.equal(result.attempts[0].evidence.command.exitCode, 0)
+    assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
+  }
+})
+
+test('v2 ISOLATED blocks unavailable enforcement before execution', async () => {
+  const dir = fixture()
+  const result = await runV2(dir, { task: 'Change one authentication flag' })
+  assert.equal(result.contract.risk, 'HIGH')
+  assert.equal(result.contract.profile, 'ISOLATED')
+  assert.equal(result.status, 'BLOCKED', JSON.stringify(result))
+  assert.equal(result.verificationSandbox.status, 'SANDBOX_UNAVAILABLE')
+  assert.deepEqual(result.attempts, [])
+  assert.equal(existsSync(join(dir, '.model-ladder/fake-calls.jsonl')), false)
+  cleaned(dir)
+})
+
+test('v2 refuses missing mandatory evidence and snapshots the original checkout on delivery conflicts', async () => {
+  const missing = fixture({}, { verify: null })
+  const blocked = await runV2(missing)
+  assert.equal(blocked.status, 'BLOCKED')
+  assert.equal(blocked.errorCode, 'VERIFY_COMMAND_REQUIRED')
+  assert.equal(existsSync(join(missing, '.model-ladder/fake-calls.jsonl')), false)
+  const dir = fixture({ conflict: true })
+  const result = await runV2(dir)
+  assert.equal(result.status, 'CONFLICT', JSON.stringify(result))
+  assert.equal(result.delivery.status, 'CONFLICT')
+  assert.equal(result.attempts[0].status, 'VERIFIED')
+  assert.match(read(dir, 'greeting.mjs'), /Concurrent edit/)
+  assert.ok(existsSync(result.outcome.patch))
+})
+
+test('v2 quota exhaustion preserves the contract and checkpoint without retrying', async () => {
+  const dir = fixture({ environment: 'worker', limitEvent: true })
+  const result = await runV2(dir)
+  assert.equal(result.status, 'BLOCKED', JSON.stringify(result))
+  assert.equal(result.errorCode, 'USAGE_LIMIT')
+  assert.equal(result.failure, 'QUOTA_EXHAUSTED')
+  assert.equal(result.telemetry.worker.calls, 1)
+  assert.equal(result.telemetry.total.inputTokens, 'UNKNOWN')
+  assert.deepEqual(calls(dir).map(({ phase }) => phase), ['worker'])
+  assert.ok(existsSync(result.checkpointPath))
+  const resume = JSON.parse(readFileSync(result.handoffPath, 'utf8').match(/```json\n([\s\S]*?)\n```/)[1])
+  assert.equal(resume.contract.id, result.contract.id)
+  assert.equal(resume.resumeRun, result.runId)
+  assert.equal(resume.task, undefined)
+  assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
+})
+
+test('v2 context exhaustion retains a checkpoint and blocks without model escalation', async () => {
+  const dir = fixture({ environment: 'worker', environmentMessage: 'maximum context window exceeded' })
+  const result = await runV2(dir, { profile: 'MANAGED' })
+  assert.equal(result.status, 'BLOCKED', JSON.stringify(result))
+  assert.equal(result.errorCode, 'CONTEXT_LIMIT')
+  assert.equal(result.attempts[0].status, 'BLOCKED')
+  assert.equal(result.resumeRun, result.runId)
+  assert.ok(existsSync(result.checkpointPath))
+  assert.deepEqual(calls(dir).map(({ phase }) => phase), ['worker'])
+})
+
+test('v2 termination failure blocks verification and retains the run lock and draft', async () => {
+  const dir = fixture({ delay: 6000 })
+  const signal = new AbortController()
+  let pid
+  const pending = runV2(dir, {}, { signal: signal.signal, terminate: (childPid) => {
+    pid = childPid
+    throw new Error('Access denied')
+  } })
+  const log = join(dir, '.model-ladder/fake-calls.jsonl')
+  for (let n = 0; n < 250 && !existsSync(log); n++) await new Promise((resolve) => setTimeout(resolve, 20))
+  signal.abort()
+  const result = await pending
+  try {
+    assert.equal(result.status, 'BLOCKED', JSON.stringify(result))
+    assert.equal(result.errorCode, 'TERMINATION_FAILED')
+    assert.equal(result.terminationFailure.childPid, pid)
+    assert.equal(result.resumeRun, undefined)
+    assert.ok(existsSync(result.retainedWorktrees[0]))
+    assert.ok(existsSync(join(dir, '.model-ladder/runs', `${result.runId}.json`)))
+    assert.deepEqual(calls(dir).map(({ phase }) => phase), ['worker'])
+    assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
+  } finally {
+    if (pid) { try { process.kill(pid, 'SIGKILL') } catch {} }
+    unregisterRun(result.runId)
+  }
+})
+
+test('v2 ISOLATED holds the locally verified candidate for independent delivery approval', async () => {
+  const dir = fixture({ simulateSandbox: true })
+  const result = await runV2(dir, { profile: 'ISOLATED' })
+  assert.equal(result.status, 'REVIEW_REQUIRED', JSON.stringify(result))
+  assert.equal(result.verificationSandbox.stage, 'command')
+  assert.deepEqual(calls(dir).map(({ phase, sandbox, networkAccess }) => [phase, sandbox, networkAccess]), [['worker', 'workspace-write', false], ['verify', 'read-only', false]])
+  assert.equal(result.attempts[0].status, 'VERIFIED')
+  assert.deepEqual(result.delivery, { status: 'APPROVAL_REQUIRED', ci: 'UNVERIFIED' })
+  assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
+  pruneRuns(dir)
+  assert.ok(existsSync(result.worktreePath))
+})
+
+test('v2 Claude consumes the same contract and returns shared evidence', async () => {
+  const dir = fixture()
+  write(dir, '.claude/model-ladder.json', JSON.stringify({ verify: 'node --test tests/check.test.mjs', usageGuard: { enabled: false } }))
+  git(dir, 'add', '.claude/model-ladder.json')
+  git(dir, 'commit', '-qm', 'configure Claude fixture')
+  const launcher = `
+    const assert = require('node:assert/strict');
+    const fs = require('node:fs');
+    const args = process.argv.slice(1);
+    const phase = process.env.MODEL_LADDER_ROLE;
+    assert.ok(args.includes('--print'));
+    assert.ok(args.includes('--strict-mcp-config'));
+    assert.equal(args[args.indexOf('--tools') + 1], phase === 'worker' ? 'Read,Grep,Glob,Edit,Write' : 'Read,Grep,Glob');
+    const schema = JSON.parse(args[args.indexOf('--json-schema') + 1]);
+    assert.ok(schema.required.includes(phase === 'worker' ? 'status' : 'pass'));
+    if (phase === 'worker') fs.writeFileSync('greeting.mjs', 'export default "Welcome"\\n');
+    const structured_output = phase === 'worker' ? { status: 'done', summary: 'fixed', blockedReason: null } : { pass: true, reason: 'checked', output: '' };
+    console.log(JSON.stringify({ structured_output, usage: { input_tokens: 2, cache_creation_input_tokens: 1, cache_read_input_tokens: 3, output_tokens: 5 }, modelUsage: { 'fixture-model': {} } }));
+  `
+  const result = await runV2(dir, { backend: 'claude', coverage: 'partial' }, { executable: { command: process.execPath, prefixArgs: ['-e', launcher, '--'] } })
+  assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
+  assert.equal(result.evidence.backend, 'claude')
+  assert.deepEqual(result.attempts[0].evidence.workerBoundary, { requestedMode: 'NATIVE_FILE_TOOL_ALLOWLIST', approvalPrompts: 'none', enforcement: 'UNVERIFIED' })
+  assert.equal(result.attempts[0].evidence.command.sandbox, 'HOST_UNSANDBOXED')
+  assert.equal(result.attempts[0].status, 'VERIFIED')
+  assert.equal(result.telemetry.router.calls, 0)
+  assert.equal(result.telemetry.total.inputTokens, 12)
+  assert.equal(result.telemetry.total.cachedInputTokens, 6)
+  assert.deepEqual(result.usage[0].models, ['fixture-model'])
+  assert.match(read(dir, 'greeting.mjs'), /Welcome/)
+  const isolated = await runV2(dir, { backend: 'claude', profile: 'ISOLATED' })
+  assert.equal(isolated.status, 'BLOCKED')
+  assert.equal(isolated.verificationSandbox.status, 'SANDBOX_UNAVAILABLE')
+  cleaned(dir)
 })
 test('matching session token count enables the DIRECT route', async () => {
   const dir = fixture()
@@ -181,7 +410,44 @@ test('passing existing tests cannot approve a task rejected by the independent v
   const result = await run(dir)
   assert.equal(result.status, 'FAILED', JSON.stringify(result))
   assert.match(result.attempts[0].reason, /Requested behavior is missing/)
+  assert.equal(result.attempts[0].evidence.command.status, 'PASSED')
+  assert.equal(result.attempts[0].evidence.review.status, 'FAILED')
   assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
+  cleaned(dir)
+})
+
+test('a passing command that changes the candidate blocks review and application', async () => {
+  const dir = fixture({}, { verify: 'node verify.mjs', maxAttempts: 1 })
+  write(dir, 'verify.mjs', 'import { writeFileSync } from "node:fs"\nwriteFileSync("greeting.mjs", "changed during verification\\n")\n')
+  git(dir, 'add', 'verify.mjs')
+  git(dir, 'commit', '-qm', 'add verification command')
+  const result = await run(dir)
+  assert.equal(result.status, 'FAILED', JSON.stringify(result))
+  assert.match(result.attempts[0].reason, /Verification changed repository files/)
+  assert.equal(result.attempts[0].evidence.command.exitCode, 0)
+  assert.equal(result.attempts[0].evidence.review.status, 'SKIPPED')
+  assert.equal(result.attempts[0].evidence.review.reason, 'SNAPSHOT_CHANGED')
+  assert.deepEqual(calls(dir).map((call) => call.phase), ['route', 'worker'])
+  assert.match(read(dir, 'greeting.mjs'), /Wellcome/)
+  cleaned(dir)
+})
+
+test('required verification sandbox unavailability blocks before any role or host command', async () => {
+  const dir = fixture({}, { verify: 'node unsafe.mjs' })
+  const marker = join(dir, 'host-command-ran')
+  write(dir, 'unsafe.mjs', `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'ran')`)
+  git(dir, 'add', 'unsafe.mjs')
+  git(dir, 'commit', '-qm', 'verification fixture')
+  const result = await run(dir, { requireVerificationSandbox: true }, {
+    executable: { command: process.execPath, prefixArgs: ['-e', 'process.exit(42)', '--'] },
+  })
+  assert.equal(result.status, 'STOPPED', JSON.stringify(result))
+  assert.equal(result.errorCode, 'VERIFY_SANDBOX_UNAVAILABLE')
+  assert.equal(result.verificationSandbox.status, 'SANDBOX_UNAVAILABLE')
+  assert.equal(result.verificationSandbox.evidence.launcherExitCode, 42)
+  assert.equal(existsSync(marker), false)
+  assert.equal(existsSync(join(dir, '.model-ladder/fake-calls.jsonl')), false)
+  assert.deepEqual(result.attempts, [])
   cleaned(dir)
 })
 
@@ -199,6 +465,8 @@ test('failed test escalates legally, invalid route and move fall back, retry sta
   assert.equal(result.status, 'VERIFIED', JSON.stringify(result))
   assert.deepEqual(result.attempts.map((a) => a.cell), ['cheap/low', 'cheap/medium'])
   assert.equal(result.attempts[0].pass, false)
+  assert.deepEqual(result.attempts[0].evidence.command, { source: 'CONFIG', status: 'FAILED', reason: null, exitCode: 1, sandbox: 'HOST_UNSANDBOXED' })
+  assert.equal(result.attempts[0].evidence.review.reason, 'COMMAND_DID_NOT_PASS')
   assert.match(calls(dir).findLast((c) => c.phase === 'worker').prompt, /Fix the greeting/)
   cleaned(dir)
 })
@@ -534,12 +802,58 @@ test('usageGuard disabled ignores high usage', async () => {
 
 // Another ladder runner on this machine, as the machine-wide registry records it: a live process with a repo.
 function runningLadder(otherRoot) {
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  const registration = join(activeDir(), 'codex-other.json')
+  const script = `process.on('SIGTERM', () => { require('node:fs').rmSync(${JSON.stringify(registration)}, { force: true }); process.exit(0) }); setInterval(() => {}, 1000)`
+  const child = spawn(process.execPath, ['-e', script], { stdio: 'ignore' })
   const exited = new Promise((resolve) => child.once('exit', () => resolve(true)))
   write(otherRoot, '.model-ladder/live.json', JSON.stringify({ runId: 'codex-other', task: 'Other repo task', input: { task: 'Other repo task' }, agents: [{ phase: 'worker', model: 'cheap', effort: 'low', startedAt: new Date().toISOString(), endedAt: null }] }))
   registerRun({ runId: 'codex-other', pid: child.pid, root: otherRoot, runtime: 'codex' })
   return { child, exited }
 }
+
+test('a denied cross-run tree stop retains registration and provides failure evidence', async () => {
+  const root = fixture()
+  const other = runningLadder(root)
+  try {
+    const failures = []
+    const stopped = forceStopRuns({ terminate: () => { throw new Error('Access denied') }, onFailure: (failure) => failures.push(failure) })
+    assert.deepEqual(stopped, [])
+    assert.deepEqual(activeRuns().map(({ runId }) => runId), ['codex-other'])
+    assert.equal(failures[0].pid, other.child.pid)
+    assert.match(failures[0].message, /Access denied/)
+    assert.equal(existsSync(join(root, '.model-ladder/HANDOFF.md')), false)
+  } finally { other.child.kill(); await other.exited; unregisterRun('codex-other') }
+})
+
+test('runner retains the worktree and lock when its process tree cannot be stopped', async () => {
+  const dir = fixture({ delay: 10000 })
+  const controller = new AbortController()
+  let childPid
+  const pending = run(dir, {}, { signal: controller.signal, terminate: (pid) => {
+    childPid = pid
+    throw new Error('Access denied')
+  } })
+  const callsFile = join(dir, '.model-ladder/fake-calls.jsonl')
+  const deadline = Date.now() + 6000
+  while ((!existsSync(callsFile) || !read(dir, '.model-ladder/fake-calls.jsonl').includes('"phase":"worker"')) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+  controller.abort()
+  const result = await pending
+  try {
+    assert.equal(result.status, 'ERROR', JSON.stringify(result))
+    assert.equal(result.errorCode, 'TERMINATION_FAILED')
+    assert.equal(result.terminationFailure.childPid, childPid)
+    assert.ok(existsSync(result.retainedWorktrees[0]))
+    assert.ok(existsSync(join(dir, '.model-ladder/runs', `${result.runId}.json`)))
+    assert.equal(result.resumeRun, undefined)
+    assert.equal(result.handoffPath, undefined)
+    assert.match(read(dir, '.model-ladder/history.jsonl'), /TERMINATION_FAILED/)
+  } finally {
+    if (childPid) { try { process.kill(childPid, 'SIGKILL') } catch {} }
+    unregisterRun(result.runId)
+  }
+})
 test('usage over the global usageGuard threshold mid-agent force-stops the Codex child and other ladder runs and writes HANDOFF.md', async () => {
   const dir = fixture({ delay: 20000 })
   const otherRoot = mkdtempSync(join(tmpdir(), 'ml-other-'))

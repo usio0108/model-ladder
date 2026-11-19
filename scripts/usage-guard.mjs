@@ -12,7 +12,6 @@
 // Claude Code agents are not killed mid-call: a Claude run stops at its next check (preflight, or the verifier after
 // an attempt), and the band (hooks/band/register.tsx) asks the main session for an AI-written handoff as soon as a
 // usage window reaches the threshold.
-import { execFileSync } from 'node:child_process'
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,6 +19,7 @@ import { pathToFileURL } from 'node:url'
 import { GUARD_DEFAULT } from '../hooks/config-layers.mjs'
 import { writeHandoff } from './codex-handoff.mjs'
 import { loadLayered } from './config.mjs'
+import { killWindowsTree } from './process-tree.mjs'
 import { alive, releaseLock } from './runs.mjs'
 import { projectUsageFile, readClaudeUsage } from './usage-statusline.mjs'
 
@@ -57,32 +57,41 @@ export function activeRuns() {
     const path = join(activeDir(), name)
     let entry
     try { entry = JSON.parse(readFileSync(path, 'utf8')) } catch { return [] }
-    if (alive(entry?.pid) !== true) { rmSync(path, { force: true }); return [] }
+    if (entry.terminationFailed) return []
+    const running = alive(entry?.pid)
+    if (running === false && !entry.stopRequested) rmSync(path, { force: true })
+    if (running !== true) return []
     return [entry]
   })
 }
 
-// The whole process tree at once: taskkill /T on Windows; elsewhere SIGTERM, so the runner kills its own detached
-// Codex child (its SIGTERM handler aborts every running process), then SIGKILL for what is left of its group.
-export function killTree(pid) {
-  if (process.platform === 'win32') {
-    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 })
-    return
-  }
-  try { process.kill(pid, 'SIGTERM') } catch {}
-  try { process.kill(-pid, 'SIGKILL') } catch {}
+// On POSIX the runner owns detached child groups. It acknowledges shutdown by removing its registration.
+function stopRegisteredRun(entry) {
+  if (process.platform === 'win32') return killWindowsTree(entry.pid)
+  registerRun({ ...entry, stopRequested: true })
+  process.kill(entry.pid, 'SIGTERM')
+  const wait = new Int32Array(new SharedArrayBuffer(4))
+  const deadline = Date.now() + 5000
+  do {
+    try { readFileSync(entryPath(entry.runId)) }
+    catch (error) { if (error.code === 'ENOENT') return; throw error }
+    Atomics.wait(wait, 0, 0, 50)
+  } while (Date.now() < deadline)
+  throw new Error('Runner did not acknowledge tree termination after SIGTERM')
 }
 
 // Stops every registered run except `exclude` (and this process) and writes each stopped run's HANDOFF.md with
 // `handoff(root, { stopped: reason })` (default: the handoff from that repository's live.json). Returns the run IDs
 // it stopped.
-export function forceStopRuns({ exclude = null, reason = 'Force-stopped: usage reached the usageGuard threshold.', handoff = writeHandoff } = {}) {
+export function forceStopRuns({ exclude = null, reason = 'Force-stopped: usage reached the usageGuard threshold.', handoff = writeHandoff, terminate = stopRegisteredRun, onFailure } = {}) {
   const stopped = []
   for (const entry of activeRuns()) {
     if (entry.runId === exclude || entry.pid === process.pid) continue
-    try { killTree(entry.pid) }
+    try { terminate(entry) }
     catch (error) {
-      process.stderr.write(`model-ladder: could not stop run ${entry.runId} (pid ${entry.pid}): ${error.message}. Active registration retained; no stopped handoff was written.\n`)
+      const message = `Could not stop run ${entry.runId} (PID ${entry.pid}): ${error.message}. Active registration retained; no stopped handoff was written.`
+      process.stderr.write(`model-ladder: ${message}\n`)
+      onFailure?.({ runId: entry.runId, pid: entry.pid, message })
       continue
     }
     unregisterRun(entry.runId)
@@ -99,6 +108,10 @@ export function forceStopRuns({ exclude = null, reason = 'Force-stopped: usage r
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const at = process.argv.indexOf('--root')
   const state = claudeGuard(at > 0 ? process.argv[at + 1] : process.cwd())
-  if (process.argv.includes('--enforce') && guardStops(state)) state.stopped = forceStopRuns()
+  if (process.argv.includes('--enforce') && guardStops(state)) {
+    const failures = []
+    state.stopped = forceStopRuns({ onFailure: (failure) => failures.push(failure) })
+    if (failures.length) state.terminationFailures = failures
+  }
   console.log(JSON.stringify(state))
 }

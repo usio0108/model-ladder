@@ -168,7 +168,7 @@ function main(flags) {
     }
 
     const forecast = { ...startForecast(root, 'claude', config), runId }
-    writeFileSync(join(run, 'state.json'), JSON.stringify({ baseTree, before: worktrees(root).map((w) => w.path), config, forecast }, null, 2))
+    writeFileSync(join(run, 'state.json'), JSON.stringify({ baseTree, baseCommit: head.out, before: worktrees(root).map((w) => w.path), config, protection, forecast }, null, 2))
 
     return {
       status: 'READY',
@@ -178,6 +178,7 @@ function main(flags) {
         config,
         protection,
         baseCommit: head.out,
+        candidateCommand: `node "${join(dirname(fileURLToPath(import.meta.url)), 'finish.mjs')}" --candidate ${runId}`,
         hasVerifySkill: existsSync(join(root, '.claude', 'skills', 'verify', 'SKILL.md')),
         setupPatch,
         setupFiles,

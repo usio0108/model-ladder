@@ -4,6 +4,19 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [1.3.0] - 2026-11-19
+
+- **Local Fast Path**: `/model-ladder:run` and the Codex skill first try a fast path when the session can name the one file a task changes and the project's verify command fully checks it. `scripts/fast-path.mjs` applies the Execution v2 risk policy, the session edits the file, and the verify command runs on that exact snapshot in a clean worktree. No router, worker or verifier agent starts. Anything else, a dirty checkout or an active ladder run falls back to the ladder unchanged.
+- **Passive telemetry**: `node scripts/telemetry.mjs [--json]` summarizes `.model-ladder/history.jsonl` (Execution v2, fast path, and legacy Codex and Claude runs) without model calls: profiles, retries, reviewer token share, observed tokens per verified run and failures. Missing values stay `UNKNOWN`, and task text is not copied.
+- **CI and cloud evidence**: `node scripts/ci-evidence.mjs ci --ref <sha> --branch <base> [--local <status>]` reads GitHub check runs, commit statuses and required checks; only a local `VERIFIED` with CI `PASS` is delivery-ready, and unreadable CI is `UNKNOWN`. `cloud` detects the official `codex cloud exec` and `claude --cloud` commands, and `handoff` prints a scoped pull-request brief for you to run. It never starts cloud work, pushes or merges.
+- **Execution v2**: task contracts (`codex-run.mjs --input`) with deterministic `DIRECT`, `MANAGED` and `ISOLATED` profiles, scope and protected-path gates, candidate snapshots and usage evidence, for Codex and Claude.
+- Claude history lines record `tokens: null` instead of `0` when the Workflow reports no total.
+- The benchmark harness is archived; see `docs/benchmarks/benchmark-environment.md`.
+- Codex can require native sandbox enforcement for deterministic checks. A denied launch or failed boundary probe stops the run.
+- A failed tree stop retains the affected Codex run's evidence. Claude Finish checks the verifier's recorded Git tree before applying a candidate.
+- Codex run results record candidate snapshots, command exits, and independent verdicts. A check that changes the candidate blocks review and application.
+- GitHub Actions uses read-only repository permissions and discards checkout credentials before tests run.
+
 ## [1.2.11] - 2026-11-17
 
 Codex reaches parity with the Claude Code side for the panel, usage handoff, skills and safety checks.

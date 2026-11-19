@@ -1,7 +1,8 @@
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { killChildTree } from './process-tree.mjs'
 
 const string = { type: 'string' }
 const nullable = { type: ['string', 'null'] }
@@ -51,24 +52,39 @@ export function usageLimitFailure(text) {
   return !SETUP_FAILURE.test(text) && LIMIT_FAILURE.test(text)
 }
 
-function kill(child) {
-  if (!child.pid) return
-  if (process.platform === 'win32') {
-    try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 }) } catch { child.kill('SIGKILL') }
-  } else {
-    try { process.kill(-child.pid, 'SIGKILL') } catch {}
-  }
-}
-
-export function processRun(command, args, { cwd, input = '', timeoutMs = 600000, signal, shell = false, env: extraEnv = {}, onStdout } = {}) {
+export function processRun(command, args, { cwd, input = '', timeoutMs = 600000, signal, shell = false, env: extraEnv = {}, inheritEnv = true, onStdout, terminate = killChildTree } = {}) {
   return new Promise((resolve, reject) => {
-    let stdout = '', stderr = '', stopped = null
+    let stdout = '', stderr = '', stopped = null, closeTimer
     const failure = (message, code) => Object.assign(new EnvironmentError(message), { code, cwd, stdout, stderr })
     if (signal?.aborted) return reject(failure('Cancelled', 'CANCELLED'))
-    const env = { ...process.env, ...extraEnv }
+    const env = { ...(inheritEnv ? process.env : {}), ...extraEnv }
     delete env.NODE_TEST_CONTEXT
     const child = spawn(command, args, { cwd, env, shell, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
-    const stop = (code) => { if (!stopped) { stopped = code; kill(child) } }
+    const clear = () => {
+      clearTimeout(timer)
+      clearTimeout(closeTimer)
+      signal?.removeEventListener('abort', abort)
+    }
+    const stopFailed = (message) => {
+      clear()
+      reject(Object.assign(failure(`Process tree termination failed after ${stopped}: ${message}`, 'TERMINATION_FAILED'), { childPid: child.pid, stopCause: stopped }))
+      // A survivor may keep pipes open indefinitely. Report failure and let the caller retain its worktree.
+      child.stdout.destroy()
+      child.stderr.destroy()
+      child.stdin.destroy()
+      child.unref()
+    }
+    const stop = (code) => {
+      if (stopped) return
+      stopped = code
+      try {
+        if (!child.pid) throw new Error('Child PID unavailable')
+        terminate(child.pid)
+        closeTimer = setTimeout(() => stopFailed('Child streams did not close after tree termination'), 5000)
+      } catch (error) {
+        stopFailed(error.message)
+      }
+    }
     const abort = () => stop('CANCELLED')
     signal?.addEventListener('abort', abort, { once: true })
     // Idle limit, not a deadline: any output proves the child is still working and restarts the clock.
@@ -77,10 +93,9 @@ export function processRun(command, args, { cwd, input = '', timeoutMs = 600000,
     child.stdout.setEncoding('utf8').on('data', (data) => { timer.refresh(); stdout = tail(stdout + data, 131072); onStdout?.(data) })
     child.stderr.setEncoding('utf8').on('data', (data) => { timer.refresh(); stderr = tail(stderr + data, 16384) })
     child.stdin.on('error', () => {})
-    child.on('error', (error) => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(failure(error.message, error.code)) })
+    child.on('error', (error) => { clear(); reject(failure(error.message, error.code)) })
     child.on('close', (code) => {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', abort)
+      clear()
       if (stopped) reject(failure(stopped === 'TIMEOUT' ? `Timed out after ${timeoutMs}ms without output` : 'Cancelled', stopped))
       else resolve({ code, stdout, stderr })
     })
@@ -90,17 +105,18 @@ export function processRun(command, args, { cwd, input = '', timeoutMs = 600000,
 
 // env reaches this one Codex child and, through shell_environment_policy.set, every command it runs in its sandbox,
 // whatever the person's inherit policy. It never changes the runner's own environment.
-export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs, signal, executable, onActivity, schema = SCHEMAS[phase], env = {}, network = false }) {
+export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeoutMs, signal, executable, onActivity, schema = SCHEMAS[phase], env = {}, network = false, forceOffline = false, terminate }) {
   const schemaPath = join(run, `${phase}.schema.json`)
   const outputPath = join(run, `${phase}.output.json`)
   writeFileSync(schemaPath, JSON.stringify(schema))
   rmSync(outputPath, { force: true })
   const shellEnv = Object.entries(env).flatMap(([key, value]) => ['-c', `shell_environment_policy.set.${key}=${JSON.stringify(value)}`])
-  const args = [...(executable?.prefixArgs ?? []), 'exec', '-m', cell.model, '-c', `model_reasoning_effort=${JSON.stringify(cell.effort)}`, ...shellEnv, ...(network ? ['-c', 'sandbox_workspace_write.network_access=true'] : []),
+  const args = [...(executable?.prefixArgs ?? []), 'exec', '-m', cell.model, '-c', `model_reasoning_effort=${JSON.stringify(cell.effort)}`, ...shellEnv, ...(network || forceOffline ? ['-c', `sandbox_workspace_write.network_access=${network && !forceOffline}`] : []),
+    ...(forceOffline ? ['-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.writable_roots=[]'] : []),
     '-C', cwd, '--json', '--output-schema', schemaPath, '-o', outputPath, '--sandbox', sandbox, '-']
   let result, events = [], pending = ''
   try {
-    result = await processRun(executable?.command ?? process.env.CODEX_BINARY ?? 'codex', args, { cwd, input: `This is one internal model-ladder role. Do not invoke model-ladder skills, workflows or runners recursively; perform only the assigned role.\n\n${prompt}`, timeoutMs, signal, env: { ...env, MODEL_LADDER_ROLE: phase, MODEL_LADDER_AUTORUN: '0', MODEL_LADDER_BAND: '0' }, onStdout: (data) => {
+    result = await processRun(executable?.command ?? process.env.CODEX_BINARY ?? 'codex', args, { cwd, input: `This is one internal model-ladder role. Do not invoke model-ladder skills, workflows or runners recursively; perform only the assigned role.\n\n${prompt}`, timeoutMs, signal, terminate, env: { ...env, MODEL_LADDER_ROLE: phase, MODEL_LADDER_AUTORUN: '0', MODEL_LADDER_BAND: '0' }, onStdout: (data) => {
       const lines = (pending + data).split('\n'); pending = lines.pop()
       for (const line of lines) try {
         const event = JSON.parse(line)

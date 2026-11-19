@@ -4,6 +4,10 @@
 
 ## Reports
 
+Execution v2 adds a task contract, per-attempt evidence, and a delivery state separate from CI. To run a contract through Claude or Codex and compare the new states with legacy results, see the [Execution v2 migration guide](docs/migration/execution-v2.md).
+
+A Local Fast Path check reports `VERIFIED`, `FAILED`, `CONFLICT` (the checkout changed while it was being verified), `INCONCLUSIVE` or `BLOCKED`. Its `begin` step returns `NOT_ELIGIBLE` when the task needs the ladder. `node scripts/telemetry.mjs [--json]` summarizes history without model calls; see [passive telemetry](docs/telemetry/passive-telemetry.md). `node scripts/ci-evidence.mjs ci --ref <sha> --branch <base> [--local VERIFIED]` reads GitHub CI and, with `--local`, prints the delivery gate. Unreadable CI is `UNKNOWN`, and only a `PASS` with local `VERIFIED` is delivery-ready.
+
 Reports summarize the task, attempts, changed files, verification, and remaining limits in your session language.
 
 | Result | Meaning |
@@ -18,6 +22,24 @@ Reports summarize the task, attempts, changed files, verification, and remaining
 
 Claude quota stops return `USAGE_LIMIT`; Codex returns `STOPPED` with `errorCode: "USAGE_LIMIT"`.
 Run history is stored in `.model-ladder/history.jsonl`.
+
+### Codex verification evidence
+
+Look for `evidence.version: 1` in the runner result or its history entry. The run records the Git base commit and base tree. Each `attempts[].evidence` records the candidate tree ID and changed paths when the worker produces a snapshot. The `command` record identifies the configured or discovered check and records its observed exit code. The `review` record identifies the reviewer model and effort and records its verdict. `SKIPPED` carries a reason. `INCONCLUSIVE` identifies an interrupted or unavailable check or verdict. A missing dependency can produce a nonzero shell exit without running the test suite.
+
+Read the attempt's `pass` and the run's `status` and `outcome` for the delivery decision. An individual command or review can pass before the snapshot integrity check rejects the attempt. Older records and runs stopped before capturing the baseline may omit `evidence`.
+
+The evidence fields omit command text, process output, and model commentary. Existing fields and raw role logs can contain sensitive data. Review them before sharing.
+
+### Require a native verification sandbox
+
+Set `requireVerificationSandbox: true` in the Codex runner's JSON input. To require it for all runs started from a trusted shell, set `MODEL_LADDER_REQUIRE_VERIFICATION_SANDBOX=1` in that shell. Keep the setting on for `directRun` or `resumeRun` when the original run required it.
+
+The runner needs a configured or discovered deterministic command and a Codex CLI with the native permissions-profile helper. It checks access to an outside file and to a live host loopback listener before routing and again before the command. `SANDBOX_UNAVAILABLE` means the runner could not establish the sandbox or complete its controls. `SANDBOX_ENFORCEMENT_FAILED` means the launcher reached the checks but the required denials were not established. `SANDBOX_VERIFIED` records successful controls for the reported stage. `HOST_UNSANDBOXED` identifies a host-shell command. The native path uses an allowlisted environment, disables networking, and does not borrow the main checkout's virtual environment.
+
+For trusted low-risk checks, the default runner still uses the host shell and inherits the runner's environment and access. A worktree provides a separate checkout. Only the deterministic command in required mode uses the new sandbox policy. Codex roles, Git operations, and Claude verification use their existing host boundaries.
+
+`TERMINATION_FAILED` means a process tree may still be running. Check the reported PID and retained evidence before clearing the lock or reusing the worktree. The runner supplies no automatic resume or successful-stop handoff for this result.
 
 Without an existing verify command or skill, supply explicit acceptance criteria or use `create-verification-skill` and `maintain-verification-skill`.
 Claude generates `.claude/skills/verify/`; Codex generates `.agents/skills/verify/` and also accepts the Claude path.

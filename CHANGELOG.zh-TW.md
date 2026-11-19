@@ -4,6 +4,19 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [1.3.0] - 2026-11-19
+
+- **Local Fast Path**：`/model-ladder:run` 與 Codex skill 會先嘗試快速路徑：當 session 能指出任務只改的那一個檔案，且專案的 verify 指令能完整檢查結果時，`scripts/fast-path.mjs` 套用 Execution v2 風險規則，由 session 修改該檔，再於乾淨 worktree 中對同一份 snapshot 執行 verify 指令，不啟動 router、worker 或 verifier agent。其他任務、有未提交變更或有其他 ladder run 進行中時，照舊走 ladder。
+- **被動 telemetry**：`node scripts/telemetry.mjs [--json]` 不呼叫模型即可彙總 `.model-ladder/history.jsonl`（Execution v2、快速路徑、舊版 Codex 與 Claude 執行）：各 profile 使用量、重試、reviewer token 占比、每個 VERIFIED 任務的實測 token 與失敗情況。缺少的值保持 `UNKNOWN`，不複製任務內容。
+- **CI 與雲端證據**：`node scripts/ci-evidence.mjs ci --ref <sha> --branch <base> [--local <status>]` 讀取 GitHub check run、commit status 與 required checks；只有本機 `VERIFIED` 加上 CI `PASS` 才算可交付，讀不到的 CI 是 `UNKNOWN`。`cloud` 偵測官方的 `codex cloud exec` 與 `claude --cloud`，`handoff` 印出限定範圍的 PR 交接內容供你自行執行，不會自動啟動雲端工作、push 或 merge。
+- **Execution v2**：task contract（`codex-run.mjs --input`）提供確定性的 `DIRECT`、`MANAGED`、`ISOLATED` profile、範圍與受保護路徑檢查、候選快照與用量證據，支援 Codex 與 Claude。
+- Workflow 未回報總量時，Claude 的 history 記錄 `tokens: null`，不再記為 `0`。
+- Benchmark harness 已封存，請見 `docs/benchmarks/benchmark-environment.md`。
+- Codex 可要求確定性檢查使用原生 sandbox。無法啟動或隔離探測失敗時，runner 會停止。
+- 無法終止程序樹時，保留受影響的 Codex 執行證據。Claude Finish 套用前會比對 verifier 記錄的 Git tree。
+- Codex 執行結果記錄候選快照、驗證命令的退出碼，以及獨立覆核結果。驗證命令若修改候選快照，就不會進入覆核或套用變更。
+- GitHub Actions 使用唯讀的 repository 權限，且 checkout 不保留憑證。
+
 ## [1.2.11] - 2026-11-17
 
 Codex 在面板、用量交接、skills 與安全檢查上補齊到與 Claude Code 端一致。

@@ -7,6 +7,8 @@
 Select a suitable model and effort, verify independently, preserve existing work, and apply only verified changes.
 Claude Code uses a Workflow; Codex uses a standalone Node runner.
 
+Execution v2 accepts an explicit task contract in the Node runner for either native backend. It reuses Git snapshots, scope locks, verification, history, and delivery. Plain task inputs keep the existing Workflow or Codex route. [Execution v2 architecture](docs/architecture/execution-v2.md)
+
 ## Modules
 
 | Module | Responsibility |
@@ -25,6 +27,9 @@ Claude Code uses a Workflow; Codex uses a standalone Node runner.
 | `scripts/sync-rules.mjs` | Generate `scripts/ladder-rules.mjs` from the workflow's pure rules. |
 
 ## Roles and flow
+
+A plain task first tries the Local Fast Path (`scripts/fast-path.mjs`). The deterministic v2 policy must select a LOW-risk `DIRECT` contract. The calling session then edits the one scoped file, and the trusted verify command runs on that snapshot in a clean worktree. No router, worker or verifier role starts. Every other task uses the roles below. See [native-first workflow](docs/architecture/native-first-workflow.md).
+
 
 | Role | Responsibility and boundary |
 |---|---|
@@ -73,7 +78,11 @@ Project overrides remain effective, and guard changes do not invalidate Codex re
 A dead worker or invalid output fails that step; failed diagnosis uses the default legal move.
 Authentication, model-access, and sandbox errors stop Codex rather than triggering escalation.
 Codex worker and verifier sandboxes have no network and a worktree without `.venv` or `node_modules`. A uv project borrows the main checkout's `.venv` read-only through role environment variables (`sandboxEnv` in `scripts/codex-run.mjs`); a uv verification without that `.venv`, or a failed npm-style check without `node_modules`, stops once instead of escalating.
-The verify command and the verifier run in a separate `attempt-<n>-verify` worktree built from the worker snapshot, so ignored files the worker left behind (different Windows sandbox account) never reach them; post-verification checks compare that worktree to the snapshot, and the worker worktree stays the retained one.
+The verify command and the verifier run in a separate `attempt-<n>-verify` worktree built from the worker snapshot. This keeps ignored files from the worker's worktree out of verification. The runner compares the worktree to the candidate after each completed stage and blocks further review or application if the stage changed repository files. The runner retains the worker worktree when recovery calls for it.
+
+The default deterministic command runs in a runner-owned host shell with the runner's environment. Required isolation uses the native `codex sandbox` helper and a restricted filesystem and network profile. The runner tests the profile before routing and before handing it the command. Codex role commands use their role's native settings. Git worktrees provide separate checkouts and share Git metadata. See the [verification safety audit](docs/audits/verification-safety.md).
+
+Claude Workflow returns `CANDIDATE` after the verifier records a matching Git tree before and after its checks. Finish reads those records, re-snapshots the worktree with a temporary index, and applies the verified tree under the existing apply mutex. Finish owns the final `VERIFIED`, `FAILED`, or `CONFLICT` status. Claude `DIRECT` retains the caller-session path.
 
 ## Isolation and concurrent runs
 

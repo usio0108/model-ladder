@@ -290,8 +290,9 @@ const VERDICT_SCHEMA = {
     reason: { type: 'string' },
     output: { type: 'string' },
     workerFiles: { type: 'array', items: { type: 'string' } },
+    candidateTree: { type: ['string', 'null'] },
   },
-  required: ['pass', 'reason', 'output', 'workerFiles'],
+  required: ['pass', 'reason', 'output', 'workerFiles', 'candidateTree'],
 }
 
 // preflight always passes usageGuard.command; the verifier runs it last and reports the guard settings and
@@ -507,11 +508,15 @@ function brief(plan, history, hint, own = null) {
   return sections.join('\n\n')
 }
 
-function verifyPrompt(plan, work) {
+function verifyPrompt(plan, work, attempt) {
   const setup = args.setupFiles?.length
     ? `\nThese files hold the user's own uncommitted changes and are exempt from the protected check unless the worker changed them further: ${args.setupFiles.join(', ')}`
     : ''
   return `You verify one model-ladder attempt. Work only inside ${work.worktreePath}. Do not edit any file.
+
+Run the snapshot helper immediately before step 3: ${args.candidateCommand} ${attempt} before
+Run it again immediately after step 3: ${args.candidateCommand} ${attempt} after
+Run both commands from the worktree root. They leave the checkout and its index unchanged. Fail if either command fails. Set candidateTree to the second command's tree hash, or null if it failed.
 
 0. Run \`git -C "${work.worktreePath}" rev-parse HEAD\`. If it is not ${args.baseCommit}, fail with reason "wrong base".
 1. ${args.setupPatch ? 'Confirm the setup patch is applied (the user\'s changes are present in the files it touches). If not, fail with reason "setup patch not applied". The user\'s starting changes are staged; the worker\'s changes are `git diff` (unstaged) plus untracked files, the `??` lines of step 2. Judge only those.' : 'Skip.'}
@@ -572,7 +577,7 @@ async function run(plan) {
     status,
     plan: {
       goal: plan.goal, verify: plan.verify, start: label(plan.start), startReason: plan.startReason,
-      allowTests: plan.allowTests, allowTestsReason: plan.allowTestsReason,
+      allowTests: plan.allowTests, allowTestsReason: plan.allowTestsReason, readOnly: plan.readOnly === true,
     },
     attempts: history.map((a) => ({
       cell: label(a.cell), pass: a.verdict.pass, reason: a.verdict.reason,
@@ -582,7 +587,7 @@ async function run(plan) {
       skills: a.work?.skills ?? null,
       diagnosisContext: a.diagnosis ? { source: `diagnosis ${label(a.cell)}`, text: [a.diagnosis.reason, a.diagnosis.hint].filter(Boolean).join('\n') } : null,
     })),
-    winner: winner ? { worktreePath: winner.worktreePath, filesChanged: winner.filesChanged, summary: winner.summary } : null,
+    winner: winner ? { worktreePath: winner.worktreePath, filesChanged: winner.filesChanged, summary: winner.summary, candidateTree: history.at(-1).verdict.candidateTree } : null,
     final,
     tokens,
   })
@@ -623,7 +628,7 @@ async function run(plan) {
     // Without a verify command an empty diff can be a read-only task; the verifier judges the report instead.
     else if (!work.filesChanged.length && plan.verify) verdict = { pass: false, reason: 'worker changed nothing', output: '' }
     else {
-      const verifier = await measured(verifyPrompt(plan, work), {
+      const verifier = await measured(verifyPrompt(plan, work, n), {
         label: `verify ${label(verifierCell)}`, phase: `Attempt ${n}`, schema: verdictSchema(), agentType: 'model-ladder:verifier', ...verifierCell,
       })
       verifyTokens = verifier.tokens
@@ -634,12 +639,15 @@ async function run(plan) {
         verdict = { pass: false, reason: 'worker changed nothing (verifier saw no unstaged or untracked changes)', output: verdict.output }
       }
     }
+    if (verdict.pass && (!args.candidateCommand || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(verdict.candidateTree))) {
+      verdict = { ...verdict, pass: false, reason: 'Verifier candidate evidence is missing' }
+    }
     tokens += verifyTokens
     const attempt = { cell, work, verdict, diagnosis: null, tokens: workerTokens + verifyTokens }
     history.push(attempt)
     log(`#${n} ${label(cell)}: ${verdict.pass ? 'PASS' : `FAIL (${verdict.reason})`}`)
 
-    if (verdict.pass) return done('VERIFIED', work, null)
+    if (verdict.pass) return done('CANDIDATE', work, null)
     // Claude's own limit is spent: the next agent would die too. Stop now, keep this attempt's worktree.
     if (limited) return done('USAGE_LIMIT', null, limited)
 

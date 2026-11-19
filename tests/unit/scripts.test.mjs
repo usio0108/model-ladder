@@ -65,11 +65,12 @@ function worktree(dir, name, edits) {
   return path
 }
 
-const verified = (wt, files) => ({
-  status: 'VERIFIED',
+const candidateTree = (wt, runId, phase) => execFileSync(process.execPath, [script('finish'), '--candidate', runId, '1', phase], { cwd: wt, encoding: 'utf8' }).trim()
+const verified = (wt, files, runId) => ({
+  status: 'CANDIDATE',
   plan: { goal: 'fix b', verify: 'pytest', start: 'haiku/low', startReason: 'small', allowTests: false, allowTestsReason: 'bug fix' },
   attempts: [{ cell: 'haiku/low', pass: true, reason: 'ok', action: null, actionReason: null, tokens: 100, worktreePath: wt }],
-  winner: { worktreePath: wt, filesChanged: files },
+  winner: { worktreePath: wt, filesChanged: files, ...(runId && candidateTree(wt, runId, 'before') && { candidateTree: candidateTree(wt, runId, 'after') }) },
   final: null,
   tokens: 150,
 })
@@ -274,7 +275,8 @@ test('VERIFIED: applies only the worker change, cleans up, writes history', () =
   const dir = repo()
   const { runId } = preflight(dir)
   const wt = worktree(dir, 'wf_1', { 'b.py': 'b = 2\n', 'c.py': 'c = 1\n' })
-  const report = finish(dir, { task: 'fix b', runId, result: verified(wt, ['b.py', 'c.py']) })
+  const result = verified(wt, ['b.py', 'c.py'], runId)
+  const report = finish(dir, { task: 'fix b', runId, result })
   assert.match(report, /model-ladder ── VERIFIED/)
   assert.match(report, /to the working tree \(not committed\)/)
   assert.equal(read(dir, 'b.py'), 'b = 2\n')
@@ -285,13 +287,45 @@ test('VERIFIED: applies only the worker change, cleans up, writes history', () =
   const history = read(dir, '.model-ladder/history.jsonl').trim().split('\n').map((l) => JSON.parse(l))
   assert.equal(history.at(-1).status, 'VERIFIED')
   assert.equal(history.at(-1).applied, true)
+  assert.equal(history.at(-1).winner.candidateTree, result.winner.candidateTree)
+})
+
+test('a Claude candidate without verifier artifacts cannot become VERIFIED', () => {
+  const dir = repo()
+  const { runId } = preflight(dir)
+  const wt = worktree(dir, 'wf_1', { 'b.py': 'b = 2\n' })
+  const result = verified(wt, ['b.py'])
+  result.winner.candidateTree = candidateTree(wt, runId, 'before')
+  const report = finish(dir, { task: 'fix b', runId, result })
+  assert.match(report, /FAILED.*\n[\s\S]*Verifier candidate evidence is missing/)
+  assert.equal(JSON.parse(read(dir, '.model-ladder/history.jsonl').trim()).status, 'FAILED')
+  assert.equal(read(dir, 'b.py'), 'b = 1\n')
+  assert.ok(existsSync(wt))
+})
+
+test('Claude rejects tree changes both during verification and after verification', () => {
+  for (const phase of ['before', 'after']) {
+    const dir = repo()
+    const { runId } = preflight(dir)
+    const wt = worktree(dir, 'wf_1', { 'b.py': 'b = 2\n' })
+    const result = verified(wt, ['b.py'])
+    result.winner.candidateTree = candidateTree(wt, runId, 'before')
+    if (phase === 'after') candidateTree(wt, runId, 'after')
+    write(wt, 'b.py', 'b = 3\n')
+    if (phase === 'before') assert.throws(() => candidateTree(wt, runId, 'after'), (error) => /Verification changed the candidate snapshot/.test(error.stdout))
+    const report = finish(dir, { task: 'fix b', runId, result })
+    assert.match(report, /model-ladder ── FAILED/)
+    if (phase === 'after') assert.match(report, /Candidate snapshot changed after verification/)
+    assert.equal(read(dir, 'b.py'), 'b = 1\n')
+    assert.ok(existsSync(wt))
+  }
 })
 
 test('VERIFIED: a patch ending in a blank context line still applies', () => {
   const dir = repo({ 'z.py': 'x = 1\ny = 1\n\n' })
   const { runId } = preflight(dir)
   const wt = worktree(dir, 'wf_1', { 'z.py': 'x = 2\ny = 1\n\n' })
-  assert.match(finish(dir, { task: 'fix z', runId, result: verified(wt, ['z.py']) }), /to the working tree/)
+  assert.match(finish(dir, { task: 'fix z', runId, result: verified(wt, ['z.py'], runId) }), /to the working tree/)
   assert.equal(read(dir, 'z.py'), 'x = 2\ny = 1\n\n')
 })
 
@@ -302,7 +336,7 @@ test('dirty run: the user change stays, the patch carries only the worker change
   const wt = worktree(dir, 'wf_1', {})
   git(wt, 'apply', out.workflowArgs.setupPatch)
   write(wt, 'b.py', 'b = 2\n')
-  finish(dir, { task: 'fix b', runId: out.runId, result: verified(wt, ['b.py']) })
+  finish(dir, { task: 'fix b', runId: out.runId, result: verified(wt, ['b.py'], out.runId) })
   assert.equal(read(dir, 'a.py'), 'a = 2\n')
   assert.equal(read(dir, 'b.py'), 'b = 2\n')
   assert.ok(!existsSync(join(artifactDir(dir), out.runId)), 'state, setup patch and index removed')
@@ -316,7 +350,7 @@ test('commit: true commits only the patch files', () => {
   write(dir, 'a.py', 'a = 2\n')
   const { runId } = preflight(dir, '--allow-dirty')
   const wt = worktree(dir, 'wf_1', { 'a.py': 'a = 2\n', 'b.py': 'b = 2\n' })
-  const report = finish(dir, { task: 'fix b', runId, result: verified(wt, ['b.py']) })
+  const report = finish(dir, { task: 'fix b', runId, result: verified(wt, ['b.py'], runId) })
   assert.match(report, /committed as/)
   assert.equal(git(dir, 'show', '--name-only', '--format=', 'HEAD'), 'b.py')
   assert.match(git(dir, 'status', '--porcelain'), /a\.py/)
@@ -327,8 +361,8 @@ test('a conflicting apply keeps the winning worktree and the patch', () => {
   const { runId } = preflight(dir)
   const wt = worktree(dir, 'wf_1', { 'b.py': 'b = 2\n' })
   write(dir, 'b.py', 'b = 99\n')
-  const report = finish(dir, { task: 'fix b', runId, result: verified(wt, ['b.py']) })
-  assert.match(report, /not applied: the patch does not apply cleanly/)
+  const report = finish(dir, { task: 'fix b', runId, result: verified(wt, ['b.py'], runId) })
+  assert.match(report, /not applied: Patch conflict/)
   assert.equal(read(dir, 'b.py'), 'b = 99\n')
   assert.ok(existsSync(wt))
   assert.ok(existsSync(join(artifactDir(dir), runId, 'result.patch')))
@@ -373,8 +407,8 @@ test('FAILED: worktrees removed, kept only with keepFailed', () => {
 test('VERIFIED read-only: nothing applied, the report is printed', () => {
   const dir = repo()
   const { runId } = preflight(dir)
-  const wt = worktree(dir, 'wf_ro', {})
-  const result = verified(wt, [])
+  const result = verified(dir, [], runId)
+  result.plan.readOnly = true
   result.winner.summary = 'A-D tables'
   const report = finish(dir, { task: 'review', runId, result })
   assert.match(report, /read-only attempt, nothing to apply/)
@@ -461,7 +495,7 @@ test('finish leaves worktrees another active run may own, and the worktrees earl
   const c = preflight(dir)
   const mine = worktree(dir, 'wf_a', { 'a.py': 'a = 2\n' })
   const theirs = worktree(dir, 'wf_b', { 'b.py': 'b = 2\n' })
-  finish(dir, { task: 'fix a', runId: a.runId, result: verified(mine, ['a.py']) })
+  finish(dir, { task: 'fix a', runId: a.runId, result: verified(mine, ['a.py'], a.runId) })
   assert.equal(read(dir, 'a.py'), 'a = 2\n')
   assert.ok(!existsSync(mine))
   assert.ok(existsSync(theirs), "another active run's worktree stays")
@@ -469,7 +503,7 @@ test('finish leaves worktrees another active run may own, and the worktrees earl
 
   // b conflicts and keeps its worktree; c, which started before it and finishes alone, must not remove it.
   write(dir, 'b.py', 'b = 99\n')
-  finish(dir, { task: 'fix b', runId: b.runId, result: verified(theirs, ['b.py']) })
+  finish(dir, { task: 'fix b', runId: b.runId, result: verified(theirs, ['b.py'], b.runId) })
   assert.ok(existsSync(theirs))
   const orphan = worktree(dir, 'wf_c', {})
   finish(dir, { task: 't', runId: c.runId, error: 'worker died before reporting' })

@@ -19,6 +19,8 @@
 
 model-ladder is a [Claude Code](https://code.claude.com) and Codex plugin. The Router selects a suitable model for each task, the Worker executes it, and the Verifier checks the result. Verified changes are delivered.
 
+Execution v2 is opt-in. A task contract selects a risk-based profile without a model router. Both native backends use the same deterministic gate and evidence. [Execution v2 migration guide](docs/migration/execution-v2.md)
+
 ## Features
 
 - **Isolated Git worktrees**: each attempt runs in its own worktree.
@@ -135,6 +137,8 @@ model-ladder is **Beta**: behavior, settings and file layouts may change between
 6. **Read the result**: completion requires verification, and the report lists changed files, checks, and remaining limits, with no commit or push by default.
 7. **Hand off and resume**: request a handoff when needed, or wait for quota reset after a usage stop and follow `.model-ladder/HANDOFF.md` to resume.
 8. **Set up project verification**: model-ladder bundles the pstack-derived [`create-verification-skill`](skills/create-verification-skill/SKILL.md) and [`maintain-verification-skill`](skills/maintain-verification-skill/SKILL.md) for Claude Code, with [Codex versions](codex-skills/) in the Codex plugin. In Claude Code, run `/model-ladder:create-verification-skill` or `/model-ladder:maintain-verification-skill`. In Codex, ask it to use the `create-verification-skill` or `maintain-verification-skill` skill. These skills generate or maintain a verification driver tailored to the target project. This repository already has its own driver at [`.agents/skills/verify/SKILL.md`](.agents/skills/verify/SKILL.md); it verifies model-ladder and is not a generic driver for other projects. See the [third-party notice](NOTICE.md) for the source and license.
+
+9. **Local Fast Path**: when the session can name the one file a task changes and the project's verify command fully checks it, model-ladder skips the router, worker and verifier agents. The session makes the edit, and the verify command runs on that exact snapshot. Any other task uses the ladder as before. Run `node scripts/telemetry.mjs` for an observed token and quality summary of past runs. See the [native-first workflow](docs/architecture/native-first-workflow.md).
 
 See [advanced usage](USAGE.md) for report examples, runner commands, concurrent runs, and run files, and [Band](#band-claude-code) for panel controls.
 

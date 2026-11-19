@@ -10,7 +10,27 @@ effort: medium
 
 Task: $ARGUMENTS
 
+When the user supplies an Execution v2 contract file, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-run.mjs" --input <file>` with that file. The contract must name backend `claude` to invoke the installed Claude CLI. Report the runner's result directly. Do not send this input through preflight or Workflow. Plain task arguments still use the Workflow below.
+
 If the task is empty, ask the user for it and stop. On the ladder path you only orchestrate: never edit the task's code yourself. Run commands from the repository root. Scripts print JSON or a report; act on them exactly as below.
+
+## 0. Local fast path (no router, no verifier agent)
+
+Try this first unless the task starts with `--ladder`. It applies only when you can already name the one existing file the task changes and the project's verify command fully checks the requested outcome. Otherwise go to step 1.
+
+Write this JSON to a new file in the system temp directory under `model-ladder/` (never in the repository), with the task, the absolute repository root, and that one repository-relative file:
+
+```json
+{ "contract": { "version": 1, "id": "<short-id>", "task": "<task>", "repository": "<repo root>", "backend": "claude", "scope": ["<file>"], "coverage": "complete", "complexity": "small" } }
+```
+
+Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/fast-path.mjs" begin --input <file>` and delete the file. It starts no model call.
+
+- `READY`: edit only the `scope` file in this checkout. Do not touch `protected` paths and do not run the verify command. Then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/fast-path.mjs" check --run <runId>`.
+- `NOT_ELIGIBLE` or `BLOCKED` from `begin`: nothing was changed. Continue with step 1 and the normal ladder.
+- `check` returns `VERIFIED`: report the changed file and that remote CI is not verified. `FAILED`: you may repair within the same file once and run `check` again; if it fails again, report the reason and that the unverified edit is still in the checkout. `CONFLICT`: run `check` once more. `BLOCKED` or `INCONCLUSIVE`: report `errorCode` and `message`.
+
+Report the fast-path result in the user's language. The fast path never commits or pushes; skip step 3 for it.
 
 ## 1. Preflight
 
@@ -114,7 +134,7 @@ If the workflow returns `ERROR` with a journal, record its end boundary, then go
 
 If stopping another registered runner fails under the sandbox, report its run ID and the shutdown error. Do not claim it stopped, clear its live lock, or bypass permissions. Claude host sessions and hosted agents have no cancellation API here; use their normal host controls.
 
-Pipe the input to the finish script, which applies a verified result, removes this run's worktrees and lock, and appends history:
+Pipe the input to the finish script. The Workflow can return `CANDIDATE`. Finish checks the recorded before/after tree and the current candidate before application, then records the final status in history:
 
 ```sh
 node "${CLAUDE_PLUGIN_ROOT}/scripts/finish.mjs" <<'EOF'

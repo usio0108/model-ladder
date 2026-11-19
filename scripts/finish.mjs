@@ -5,42 +5,85 @@
 // Each input also carries "runId", the runId preflight printed.
 // `--handoff` (no stdin) writes the template .model-ladder/HANDOFF.md from the last history entry instead.
 // Always removes this run's lock, so a crash or a "no" never leaves the guard armed for it.
-import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { canonical } from '../hooks/guard.mjs'
-import { artifactDir, git, print, pruneLeftoverBranches, removeWorktree, repoRoot, runDir, samePath, tryGit, worktrees } from './common.mjs'
-import { readLocks, releaseLock, withMutex } from './runs.mjs'
+import { artifactDir, git, print, pruneLeftoverBranches, removeWorktree, repoRoot, runDir, samePath, worktrees } from './common.mjs'
+import { readLocks, releaseLock } from './runs.mjs'
+import { applyResult, changed, protectedChange, snapshot } from './codex-worktree.mjs'
 import { updateNote } from './update-check.mjs'
 import { claudeGuard, forceStopRuns } from './usage-guard.mjs'
 import { finishForecast, history } from './forecast.mjs'
 
-function apply(root, run, state, winner) {
-  const wt = winner.worktreePath
-  git(wt, 'add', '-A')
-  const resultTree = git(wt, 'write-tree')
-  // Against BASE_TREE, not HEAD: the user's own uncommitted changes stay out of the patch.
-  const patch = join(run, 'result.patch')
-  // Raw output, not git(): trimEnd() would strip a final blank context line and corrupt the patch.
-  writeFileSync(patch, execFileSync('git', ['diff', '--binary', state.baseTree, resultTree], { cwd: root, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }))
-  const files = git(root, 'diff', '--name-only', state.baseTree, resultTree).split('\n').filter(Boolean)
-  if (!files.length) return { applied: false, files, note: 'read-only attempt, nothing to apply' }
-  // One run writes into the checkout at a time; a run whose files changed meanwhile gets a conflict.
-  return withMutex(root, 'apply', () => {
-    const applied = tryGit(root, 'apply', patch)
-    if (!applied.ok) {
-      return { applied: false, files, keep: wt, note: `the patch does not apply cleanly (files changed during the run?). Worktree kept at ${wt}; patch at ${patch}` }
-    }
-    rmSync(patch)
-    if (!state.config.commit) return { applied: true, files, committed: null }
-    git(root, 'add', '--', ...files)
-    git(root, 'commit', '-q', '-m', `model-ladder: ${winner.goal}`, '--', ...files)
-    return { applied: true, files, committed: git(root, 'rev-parse', '--short', 'HEAD') }
-  })
+const pathKey = (path) => process.platform === 'win32' ? canonical(path).toLowerCase() : canonical(path)
+const under = (path, dir) => pathKey(path).startsWith(`${pathKey(dir)}${sep}`)
+const sameCandidatePath = (a, b) => pathKey(a) === pathKey(b)
+const proofPath = (run, attempt, phase) => join(run, `candidate-${attempt}-${phase}.json`)
+const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
+
+function candidateLocation(root, cwd, state) {
+  return sameCandidatePath(root, cwd) || (under(cwd, join(root, '.claude', 'worktrees')) &&
+    !state.before.some((path) => sameCandidatePath(path, cwd)) && worktrees(root).some(({ path }) => sameCandidatePath(path, cwd)))
 }
 
-const under = (path, dir) => canonical(path).toLowerCase().startsWith(`${canonical(dir).toLowerCase()}${sep}`)
+function observeCandidate(cwd, run, state) {
+  if (git(cwd, 'rev-parse', 'HEAD') !== state.baseCommit) throw new Error('Candidate base commit changed')
+  return { worktreePath: canonical(cwd), tree: snapshot(cwd, run, `candidate-${randomUUID()}`) }
+}
+
+function recordCandidate(runId, attemptText, phase) {
+  const attempt = Number(attemptText)
+  if (!/^claude-[0-9a-f-]{36}$/.test(runId ?? '') || !Number.isSafeInteger(attempt) || attempt < 1 || !['before', 'after'].includes(phase)) throw new Error('Expected --candidate <Claude run ID> <attempt> before|after')
+  const cwd = repoRoot()
+  const root = worktrees(cwd)[0]?.path
+  if (!root || !readLocks(root).some((lock) => lock.runId === runId && lock.runtime === 'claude')) throw new Error('Candidate has no active Claude run')
+  const run = join(artifactDir(root), runId)
+  const state = readJson(join(run, 'state.json'))
+  if (!candidateLocation(root, cwd, state) || attempt > state.config.maxAttempts) throw new Error('Candidate worktree or attempt is outside the run')
+  const current = observeCandidate(cwd, run, state)
+  if (phase === 'after') {
+    const before = readJson(proofPath(run, attempt, 'before'))
+    if (!sameCandidatePath(before.worktreePath, cwd) || before.tree !== current.tree) throw new Error('Verification changed the candidate snapshot')
+  }
+  const path = proofPath(run, attempt, phase)
+  try { writeFileSync(path, JSON.stringify(current), { flag: 'wx' }) }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error
+    const existing = readJson(path)
+    if (!sameCandidatePath(existing.worktreePath, cwd) || existing.tree !== current.tree) throw new Error('Candidate evidence cannot be replaced')
+  }
+  return current.tree
+}
+
+function verifiedCandidate(root, run, state, result) {
+  const { winner, attempts, plan } = result
+  const cwd = winner.worktreePath
+  const last = attempts.at(-1)
+  if (typeof cwd !== 'string' || last?.pass !== true || typeof last.worktreePath !== 'string' ||
+    !sameCandidatePath(cwd, last.worktreePath) || !candidateLocation(root, cwd, state)) throw new Error('Invalid candidate worktree or verifier verdict')
+  if (!winner.candidateTree || !['before', 'after'].every((phase) => existsSync(proofPath(run, attempts.length, phase)))) throw new Error('Verifier candidate evidence is missing')
+  for (const phase of ['before', 'after']) {
+    const proof = readJson(proofPath(run, attempts.length, phase))
+    if (!sameCandidatePath(proof.worktreePath, cwd) || proof.tree !== winner.candidateTree) throw new Error('Verifier evidence does not match the candidate')
+  }
+  const { tree } = observeCandidate(cwd, run, state)
+  if (tree !== winner.candidateTree) throw new Error('Candidate snapshot changed after verification')
+  const files = changed(root, state.baseTree, tree)
+  if (sameCandidatePath(cwd, root)) {
+    if (plan.readOnly !== true) throw new Error('Writable candidate must be in a separate worktree')
+    if (files.length) throw new Error('Read-only checkout changed during verification')
+    return { applied: false, files: [], note: 'read-only attempt, nothing to apply' }
+  }
+  if (plan.readOnly === true) throw new Error('Read-only result must refer to the original checkout')
+  const protection = [...state.protection.always, ...(plan.allowTests === true ? [] : state.protection.tests)]
+  const protectedFile = protectedChange(root, state.baseTree, tree, protection)
+  if (protectedFile) throw new Error(`Modified protected file ${protectedFile}`)
+  if (!files.length) throw new Error('Candidate has no changes to apply')
+  const outcome = applyResult(root, run, state.baseTree, tree, state.baseCommit, { commit: state.config.commit, goal: plan.goal, requireBaseFiles: true })
+  return outcome.patch ? { ...outcome, keep: cwd } : outcome
+}
 
 // Worktrees an earlier run kept (conflict, keepFailed, usage limit), as finish recorded them in history.
 function keptByHistory(run) {
@@ -96,7 +139,7 @@ function report(task, result, outcome, notes) {
     ...rows,
     '',
     `Changed   ${outcome.files?.length ? outcome.files.join(', ') : '—'}`,
-    `Applied   ${result.status === 'VERIFIED' ? applied : 'nothing (no verified attempt)'}`,
+    `Applied   ${result.status === 'VERIFIED' || outcome.note ? applied : 'nothing (no verified attempt)'}`,
     `Tokens    ${result.tokens} output (route + attempts)`,
   ]
   // What each worker reported doing with the configured skill instructions.
@@ -156,14 +199,14 @@ function manualHandoff(root) {
 }
 
 // Every status workflows/ladder.js returns.
-const STATUSES = ['VERIFIED', 'FAILED', 'STOPPED', 'DIRECT', 'USAGE_LIMIT', 'NEEDS_INPUT']
+const STATUSES = ['CANDIDATE', 'VERIFIED', 'FAILED', 'STOPPED', 'DIRECT', 'USAGE_LIMIT', 'NEEDS_INPUT']
 
 // Runs before anything is cleaned: a wrong shape must never cost a verified worktree.
 function validate(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('input must be a JSON object {task, result} | {task, error} | {task, aborted}')
   const { task, result, error, aborted } = input
   if (typeof task !== 'string' || !task) throw new Error('task missing — input must be {task, result} | {task, error} | {task, aborted}')
-  if (input.runId !== undefined && (typeof input.runId !== 'string' || !/^[\w.-]+$/.test(input.runId))) throw new Error('runId must be the runId preflight printed')
+  if (input.runId !== undefined && (typeof input.runId !== 'string' || !/^\w[\w.-]*$/.test(input.runId))) throw new Error('runId must be the runId preflight printed')
   if (result === undefined) {
     if (aborted === undefined && error === undefined) throw new Error('input needs one of result, error or aborted')
     return
@@ -171,14 +214,15 @@ function validate(input) {
   if (!result || typeof result !== 'object') throw new Error("result must be the workflow's result object")
   if (result.status === undefined) throw new Error("result.status missing — pass the workflow's result field, not the whole output")
   if (!STATUSES.includes(result.status)) throw new Error(`result.status "${result.status}" is unknown — expected one of ${STATUSES.join(', ')}`)
-  if (result.status === 'VERIFIED' && !result.winner) throw new Error('result.status is VERIFIED but result.winner is missing')
+  if (['CANDIDATE', 'VERIFIED'].includes(result.status) && (!result.winner || !Array.isArray(result.attempts) || !result.plan)) throw new Error('Candidate requires winner, attempts and plan')
 }
 
 function main(input) {
   validate(input)
   const root = repoRoot()
   const run = runDir(root)
-  const { task, result, error, aborted, runId } = input
+  const { task, error, aborted, runId } = input
+  let { result } = input
   // Without a runId: a run an older preflight started, with its files and run.json in .model-ladder/.
   const currentFiles = runId ? join(artifactDir(root), runId) : run
   const legacyFiles = runId ? join(run, 'runs', runId) : run
@@ -190,15 +234,24 @@ function main(input) {
   let outcome = { applied: false, files: [] }
   let keep = []
 
-  // A read-only winner ran in the user's own checkout; apply would stage their changes.
-  if (result?.status === 'VERIFIED' && !result.winner.filesChanged?.length) {
-    outcome = { applied: false, files: [], note: 'read-only attempt, nothing to apply' }
-  } else if (result?.status === 'VERIFIED') {
-    outcome = apply(root, files, state, { ...result.winner, goal: result.plan.goal })
-    if (outcome.keep) keep = [outcome.keep]
+  let verificationError
+  if (['CANDIDATE', 'VERIFIED'].includes(result?.status)) {
+    if (!runId || !readLocks(root).some((lock) => lock.runId === runId && lock.runtime === 'claude')) throw new Error('Candidate has no active Claude run')
+    try {
+      if (!state.baseCommit) throw new Error('Verifier candidate evidence is missing')
+      outcome = verifiedCandidate(root, files, state, result)
+      result = { ...result, status: outcome.keep ? 'CONFLICT' : 'VERIFIED' }
+      if (outcome.keep) keep = [outcome.keep]
+    } catch (failure) {
+      verificationError = failure.message
+      const cwd = result.winner.worktreePath
+      if (state.before && typeof cwd === 'string' && !sameCandidatePath(root, cwd) && candidateLocation(root, cwd, state)) keep = [cwd]
+      result = { ...result, status: 'FAILED', final: { reason: verificationError, suggestion: 'Verify a fresh candidate before applying changes.' } }
+      if (keep.length) notes.push(`Candidate worktree retained at ${keep[0]}`)
+    }
   }
-  if (result && result.status !== 'VERIFIED' && state.config.keepFailed) {
-    keep = result.attempts.map((a) => a.worktreePath).filter(Boolean)
+  if (result && !['VERIFIED', 'CONFLICT'].includes(result.status) && state.config.keepFailed) {
+    keep = [...new Set([...keep, ...result.attempts.map((a) => a.worktreePath).filter(Boolean)])]
     if (keep.length) notes.push(`Failed attempts kept (keepFailed): ${keep.join(', ')}`)
   }
   // The last attempt's worktree is what a resumed run can look at. A worker stopped by Claude's limit never
@@ -219,6 +272,12 @@ function main(input) {
     for (const f of ['run.json', 'setup.patch', 'state.json', 'index']) rmSync(join(run, f), { force: true })
   }
 
+  const terminationFailures = []
+  if (limited && !aborted) {
+    const stopped = forceStopRuns({ reason: `Force-stopped: ${result.final?.reason ?? 'usage reached the usageGuard threshold'}`,
+      onFailure: (failure) => { terminationFailures.push(failure); notes.push(failure.message) } })
+    if (stopped.length) notes.push(`Also stopped (usage limit): ${stopped.join(', ')}`)
+  }
   const forecast = state.forecast ? finishForecast(root, state.forecast, history(root), claudeGuard(root), aborted ? 'ABORTED' : outcome.keep ? 'CONFLICT' : result?.status ?? 'ERROR') : null
   appendFileSync(join(run, 'history.jsonl'), `${JSON.stringify({
     date: new Date().toISOString(),
@@ -229,12 +288,13 @@ function main(input) {
     forecast,
     start: result?.plan?.start ?? null,
     attempts: (result?.attempts ?? []).map((a) => ({ cell: a.cell, pass: a.pass, reason: a.reason, action: a.action, tokens: a.tokens, modelContext: a.modelContext, diagnosisContext: a.diagnosisContext, ...(a.skills?.length && { skills: a.skills.map(({ name, applies, available, used, note }) => ({ name, applies, available, used, note })) }) })),
-    winner: result?.winner ? { summary: result.winner.summary } : null,
-    tokens: result?.tokens ?? 0,
+    winner: result?.winner ? { summary: result.winner.summary, ...(!verificationError && result.winner.candidateTree && { candidateTree: result.winner.candidateTree }) } : null,
+    tokens: result?.tokens ?? null,
     applied: outcome.applied,
     committed: Boolean(outcome.committed),
     kept: keep,
-    error: error ?? null,
+    ...(terminationFailures.length && { terminationFailures }),
+    error: error ?? verificationError ?? null,
   })}\n`)
 
   if (aborted) return `model-ladder stopped before running: ${aborted}`
@@ -242,9 +302,6 @@ function main(input) {
   if (result?.status === 'USAGE_LIMIT') {
     outcome.handoff = join(run, 'HANDOFF.md')
     writeFileSync(outcome.handoff, handoff(task, result, lastWorktree))
-    // The limit is shared: every other model-ladder runner on this machine stops now too, with its own HANDOFF.md.
-    const stopped = forceStopRuns({ reason: `Force-stopped: ${result.final?.reason ?? 'usage reached the usageGuard threshold'}` })
-    if (stopped.length) notes.push(`Also stopped (usage limit): ${stopped.join(', ')}`)
   }
 
   if (result?.status === 'DIRECT') {
@@ -257,9 +314,12 @@ function main(input) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const text = process.argv.includes('--handoff') ? manualHandoff(repoRoot()) : main(JSON.parse(readFileSync(0, 'utf8')))
-    const update = await updateNote()
-    print(update ? `${text}\n\n${update}` : text)
+    if (process.argv[2] === '--candidate') print(recordCandidate(...process.argv.slice(3)))
+    else {
+      const text = process.argv.includes('--handoff') ? manualHandoff(repoRoot()) : main(JSON.parse(readFileSync(0, 'utf8')))
+      const update = await updateNote()
+      print(update ? `${text}\n\n${update}` : text)
+    }
   } catch (e) {
     print(`model-ladder finish failed: ${String(e.stderr ?? e.message)}`)
     process.exitCode = 1

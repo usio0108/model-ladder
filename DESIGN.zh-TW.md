@@ -26,6 +26,9 @@ Claude Code 使用 Workflow，Codex 使用獨立 Node runner。
 
 ## 角色與流程
 
+一般任務會先嘗試 Local Fast Path（`scripts/fast-path.mjs`）：確定性的 v2 policy 必須選出 LOW 風險的 `DIRECT` contract，接著由呼叫端 session 修改那一個 scope 檔案，再於乾淨 worktree 中對該 snapshot 執行受信任的 verify 指令。這條路徑不啟動 router、worker 或 verifier。其他任務使用下列角色。請見 [native-first workflow](docs/architecture/native-first-workflow.md)。
+
+
 | 角色 | 職責與限制 |
 |---|---|
 | Router | 選擇起點、範圍、驗證方式與合法下一步。 |
@@ -73,7 +76,11 @@ Claude 外掛的 `worker_skills`、`verifier_skills` 併入個人層，專案同
 Worker 死亡或輸出無效算該步驟失敗，診斷失敗使用預設合法移動。
 Codex 的認證、模型存取與 sandbox 錯誤直接停止，不升級重試。
 Codex worker 與 verifier 的 sandbox 沒有網路，worktree 也沒有 `.venv` 或 `node_modules`。uv 專案透過角色環境變數以唯讀方式借用主 checkout 的 `.venv`（`scripts/codex-run.mjs` 的 `sandboxEnv`）；沒有該 `.venv` 的 uv 驗證，或缺少 `node_modules` 而失敗的 npm 類檢查，只停止一次，不升級重試。
-verify 指令與 verifier 在以 worker 快照建立的獨立 `attempt-<n>-verify` worktree 中執行，worker 留下的 ignored 檔案（Windows 上為不同 sandbox 帳號）因此不會影響它們；驗證後的檢查以該 worktree 對照快照，保留的仍是 worker 的 worktree。
+驗證命令與 verifier 在以 worker 快照建立的獨立 `attempt-<n>-verify` worktree 中執行，避開 worker 留下的 ignored 檔案。每個完成的階段都會將 worktree 與候選快照比對。若該階段修改了 repository 檔案，runner 會阻擋後續覆核或套用。需要保留草稿時，runner 保留 worker 的 worktree。
+
+確定性驗證命令預設由 runner 的主機 shell 執行，並繼承 runner 的環境。要求隔離時，runner 使用原生 `codex sandbox` 與限制檔案系統和網路的 profile。路由前及命令啟動前都會探測隔離是否有效。Codex 角色發出的 shell 命令則受該角色的原生設定管理。Git worktree 提供各自的 checkout 並共用 Git metadata。見[驗證安全稽核](docs/audits/verification-safety.md)。
+
+Claude Workflow 在 verifier 記錄一致的驗證前後 Git tree 後回傳 `CANDIDATE`。Finish 讀取證據，以暫存 index 重建 worktree 快照，並透過現有 apply mutex 套用已覆核的 tree。Finish 決定最終的 `VERIFIED`、`FAILED` 或 `CONFLICT`。Claude `DIRECT` 仍由呼叫端 session 處理。
 
 ## 隔離與並行執行
 

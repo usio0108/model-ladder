@@ -86,8 +86,8 @@ export function pruneLeftoverBranches(root) {
 // active lock names (its own runId or the run it resumes). Deletes the codex-<uuid> directories of
 // finished runs under artifactDir(root), and under the legacy <root>/.model-ladder that older versions
 // used, and unregisters their worktrees.
-// Kept: runs without result.json (not known to be finished), CONFLICT runs, runs holding a patch or
-// checkpoint, and under keepFailed every run that still has an attempt worktree. Never fails the run.
+// Kept: unfinished and conflicting runs, held candidates and unresolved termination, runs with a patch
+// or checkpoint, and attempt worktrees under keepFailed. Never fails the run.
 export function pruneRuns(root, { keepFailed = false } = {}) {
   const removed = []
   try {
@@ -98,9 +98,10 @@ export function pruneRuns(root, { keepFailed = false } = {}) {
         const dir = join(base, name)
         if (!/^codex-[0-9a-f-]{36}$/.test(name) || used.has(name) || !existsSync(join(dir, 'result.json'))) continue
         const attempts = readdirSync(dir).filter((file) => /^attempt-\d+$/.test(file))
-        let status
-        try { status = JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8')).status } catch { continue }
-        if (status === 'CONFLICT' || existsSync(join(dir, 'result.patch')) || existsSync(join(dir, 'checkpoint.json')) || keepFailed && attempts.length) continue
+        let result
+        try { result = JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8')) } catch { continue }
+        if (['CONFLICT', 'REVIEW_REQUIRED'].includes(result.status) || result.terminationFailure || (result.contract && result.worktreePath) ||
+          existsSync(join(dir, 'result.patch')) || existsSync(join(dir, 'checkpoint.json')) || keepFailed && attempts.length) continue
         const stuck = attempts.some((file) => !removeWorktree(root, join(dir, file)).ok && worktrees(root).some((w) => samePath(w.path, join(dir, file))))
         if (stuck) continue
         rmSync(dir, { recursive: true, force: true })

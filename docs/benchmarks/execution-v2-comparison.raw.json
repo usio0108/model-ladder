@@ -1,0 +1,679 @@
+{
+  "schemaVersion": 1,
+  "status": "INCOMPLETE",
+  "environment": {
+    "os": "Windows 10.0.26300.8697",
+    "architecture": "x64",
+    "logicalProcessors": 16,
+    "node": "24.20.0",
+    "git": "2.55.0.windows.5",
+    "codex": "0.169.0",
+    "claude": "2.1.318",
+    "dockerClient": "29.9.2",
+    "dockerServer": "29.9.2",
+    "signedInPowerShell": {
+      "codex": {
+        "exitCode": 0,
+        "signedIn": true
+      },
+      "claude": {
+        "exitCode": 0,
+        "signedIn": true
+      }
+    },
+    "modelPins": {
+      "codex": "gpt-6-luna",
+      "claude": "claude-haiku-5-5"
+    },
+    "effort": "low"
+  },
+  "sourceSnapshots": {
+    "legacyBranch": "execution-v2-baseline-20261119",
+    "legacyCommit": "c31e53681e53cca92dd3d1fb6f2ae041208f179a",
+    "legacyTree": "806fb521204178edf25f93e2416b24b5867e377a",
+    "v2Commit": "e6fe5b91af7ac71c3d0851cae0a1bbb2cb90b5a2",
+    "v2Tree": "a0521b46f54154964a84a44b381a0fc9f7a66d93",
+    "v2Parent": "98db16dcb4ae0b4b6f08e29f0b3682677a3115bf",
+    "v2SnapshotScope": "temporary clone only"
+  },
+  "pilot": {
+    "status": "BLOCKED",
+    "fixturesReproduced": true,
+    "fixtureArtifacts": [
+      "execution-v2-fixtures-1Is3H8",
+      "execution-v2-fixtures-Njabsy"
+    ],
+    "profileCases": [
+      {
+        "id": "small-bug",
+        "backend": "codex",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "DIRECT",
+        "review": false
+      },
+      {
+        "id": "small-bug",
+        "backend": "codex",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": false
+      },
+      {
+        "id": "small-bug",
+        "backend": "claude",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "DIRECT",
+        "review": false
+      },
+      {
+        "id": "small-bug",
+        "backend": "claude",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": false
+      },
+      {
+        "id": "simple-feature",
+        "backend": "codex",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "DIRECT",
+        "review": false
+      },
+      {
+        "id": "simple-feature",
+        "backend": "codex",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": false
+      },
+      {
+        "id": "simple-feature",
+        "backend": "claude",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "DIRECT",
+        "review": false
+      },
+      {
+        "id": "simple-feature",
+        "backend": "claude",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": false
+      },
+      {
+        "id": "medium-refactor",
+        "backend": "codex",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": true
+      },
+      {
+        "id": "medium-refactor",
+        "backend": "claude",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": true
+      },
+      {
+        "id": "multi-module",
+        "backend": "codex",
+        "risk": "MODERATE",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": true
+      },
+      {
+        "id": "multi-module",
+        "backend": "claude",
+        "risk": "MODERATE",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": true
+      },
+      {
+        "id": "regression-sensitive",
+        "backend": "codex",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": true
+      },
+      {
+        "id": "regression-sensitive",
+        "backend": "claude",
+        "risk": "LOW",
+        "signals": [],
+        "profile": "MANAGED",
+        "review": true
+      }
+    ],
+    "slots": [
+      {
+        "task": "small-bug",
+        "backend": "codex",
+        "arm": "A_NATIVE",
+        "state": "NOT_RUN",
+        "result": null,
+        "reason": "FIXTURE_READ_BOUNDARY_UNVERIFIED"
+      },
+      {
+        "task": "small-bug",
+        "backend": "codex",
+        "arm": "B_LEGACY",
+        "state": "NOT_RUN",
+        "result": null,
+        "reason": "FIXTURE_READ_BOUNDARY_UNVERIFIED"
+      },
+      {
+        "task": "small-bug",
+        "backend": "codex",
+        "arm": "C_V2_DIRECT",
+        "state": "NOT_RUN",
+        "result": null,
+        "reason": "FIXTURE_READ_BOUNDARY_UNVERIFIED"
+      },
+      {
+        "task": "small-bug",
+        "backend": "codex",
+        "arm": "C_V2_MANAGED",
+        "state": "NOT_RUN",
+        "result": null,
+        "reason": "FIXTURE_READ_BOUNDARY_UNVERIFIED"
+      },
+      {
+        "task": "small-bug",
+        "backend": "claude",
+        "arm": "A_NATIVE",
+        "state": "NOT_RUN",
+        "result": null,
+        "reason": "FIXTURE_READ_BOUNDARY_UNVERIFIED"
+      },
+      {
+        "task": "small-bug",
+        "backend": "claude",
+        "arm": "B_LEGACY",
+        "state": "NOT_RUN",
+        "result": null,
+        "reason": "FIXTURE_READ_BOUNDARY_UNVERIFIED"
+      },
+      {
+        "task": "small-bug",
+        "backend": "claude",
+        "arm": "C_V2_DIRECT",
+        "state": "NOT_RUN",
+        "result": null,
+        "reason": "FIXTURE_READ_BOUNDARY_UNVERIFIED"
+      },
+      {
+        "task": "small-bug",
+        "backend": "claude",
+        "arm": "C_V2_MANAGED",
+        "state": "NOT_RUN",
+        "result": null,
+        "reason": "FIXTURE_READ_BOUNDARY_UNVERIFIED"
+      }
+    ],
+    "hostBoundary": {
+      "defaultWindowsCodex": {
+        "exitCode": 0,
+        "hostReadable": [
+          true,
+          true,
+          true
+        ],
+        "reads": [
+          "READABLE",
+          "READABLE",
+          "READABLE"
+        ],
+        "credentialsUsed": false,
+        "modelInvoked": false
+      },
+      "claudeWindows": "UNVERIFIED",
+      "managedWsl": "E_ACCESSDENIED",
+      "approvedWsl": {
+        "ubuntuVersion": 2,
+        "binaries": {
+          "bwrap": true,
+          "node": false,
+          "codex": false,
+          "claude": false
+        }
+      },
+      "managedDocker": "ENGINE_PIPE_ACCESS_DENIED",
+      "approvedDocker": {
+        "image": "python:3.12-slim",
+        "exitCode": 0,
+        "uid": 65534,
+        "network": "none",
+        "hostMounts": 0,
+        "hostRepoVisible": false,
+        "binaries": {
+          "node": false,
+          "codex": false,
+          "claude": false
+        }
+      }
+    }
+  },
+  "fixtures": [
+    {
+      "id": "small-bug",
+      "category": "Small bug fix",
+      "description": "In src/greeting.mjs, fix the exported greeting from Wellcome to Welcome. Preserve the named export.\n\nEdit only src/greeting.mjs. Keep the test and configuration files unchanged. Use no external dependencies. The check is node tests/check.mjs.\n\nAcceptance:\n- The named greeting export is the string Welcome.",
+      "acceptance": [
+        "The named greeting export is the string Welcome."
+      ],
+      "scope": [
+        "src/greeting.mjs"
+      ],
+      "direct": true,
+      "head": "a43022e53721a86f7dc29f652fef5b5e59345a7b",
+      "tree": "d3eb8d0a246ea6fae7327c36c670513f9cd31191",
+      "dependencyVersions": {
+        "node": "v24.20.0",
+        "thirdParty": []
+      },
+      "evaluator": "acceptance/small-bug.mjs",
+      "offlineControls": {
+        "starterExit": 1,
+        "referenceExit": 0,
+        "tamperedLocalExit": 0,
+        "independentAfterTamperExit": 1,
+        "rejectedPathChanges": [
+          "tests/check.mjs",
+          "unexpected.mjs"
+        ]
+      }
+    },
+    {
+      "id": "simple-feature",
+      "category": "Simple feature",
+      "description": "In src/slug.mjs, implement slug(value) for ASCII strings. Trim leading and trailing whitespace, lowercase letters, and convert each interior whitespace run to one hyphen. Preserve punctuation and return an empty string for blank input.\n\nEdit only src/slug.mjs. Keep the test and configuration files unchanged. Use no external dependencies. The check is node tests/check.mjs.\n\nAcceptance:\n- ASCII slugs trim whitespace, lowercase letters, hyphenate whitespace runs, and preserve punctuation.\n- Blank and empty input return an empty string.",
+      "acceptance": [
+        "ASCII slugs trim whitespace, lowercase letters, hyphenate whitespace runs, and preserve punctuation.",
+        "Blank and empty input return an empty string."
+      ],
+      "scope": [
+        "src/slug.mjs"
+      ],
+      "direct": true,
+      "head": "7b1148c27d5594ca058ec742b54cb97513a0b315",
+      "tree": "3a187add35dbcea31507d1f74642e39e82cc7892",
+      "dependencyVersions": {
+        "node": "v24.20.0",
+        "thirdParty": []
+      },
+      "evaluator": "acceptance/simple-feature.mjs",
+      "offlineControls": {
+        "starterExit": 1,
+        "referenceExit": 0,
+        "tamperedLocalExit": 0,
+        "independentAfterTamperExit": 1,
+        "rejectedPathChanges": [
+          "tests/check.mjs",
+          "unexpected.mjs"
+        ]
+      }
+    },
+    {
+      "id": "medium-refactor",
+      "category": "Medium refactor",
+      "description": "Refactor src/inventory.mjs to remove the duplicated index-building loops in quantities and labels. Both named exports must call one new private helper named indexItems. Preserve last-row-wins behavior for duplicate SKUs, ordinary object output, and support for an empty collection. Neither function may mutate its input.\n\nEdit only src/inventory.mjs. Keep the test and configuration files unchanged. Use no external dependencies. The check is node tests/check.mjs.\n\nAcceptance:\n- Both exports call one private indexItems helper.\n- Duplicate SKUs use the last row. Empty input returns an ordinary empty object. Frozen input works.",
+      "acceptance": [
+        "Both exports call one private indexItems helper.",
+        "Duplicate SKUs use the last row. Empty input returns an ordinary empty object. Frozen input works."
+      ],
+      "scope": [
+        "src/inventory.mjs"
+      ],
+      "direct": false,
+      "head": "b28066c652698a5027411afd1ef1b47feb41e963",
+      "tree": "30b286140414fc63ae44d2cf599360d45fc52259",
+      "dependencyVersions": {
+        "node": "v24.20.0",
+        "thirdParty": []
+      },
+      "evaluator": "acceptance/medium-refactor.mjs",
+      "offlineControls": {
+        "starterExit": 1,
+        "referenceExit": 0,
+        "tamperedLocalExit": 0,
+        "independentAfterTamperExit": 1,
+        "rejectedPathChanges": [
+          "tests/check.mjs",
+          "unexpected.mjs"
+        ]
+      }
+    },
+    {
+      "id": "multi-module",
+      "category": "Multi-module modification",
+      "description": "Update src/label.mjs and src/totals.mjs. formatLabel must render Total: <value>. summarize must sum all input numbers and call the imported formatLabel with that total. Return total and label. Treat empty input as zero, preserve both exports, and keep the input array intact.\n\nEdit only src/label.mjs, src/totals.mjs. Keep the test and configuration files unchanged. Use no external dependencies. The check is node tests/check.mjs.\n\nAcceptance:\n- Format labels as Total: <value>.\n- summarize sums positive and negative inputs, handles an empty array, and uses the imported helper without mutating the array.",
+      "acceptance": [
+        "Format labels as Total: <value>.",
+        "summarize sums positive and negative inputs, handles an empty array, and uses the imported helper without mutating the array."
+      ],
+      "scope": [
+        "src/label.mjs",
+        "src/totals.mjs"
+      ],
+      "direct": false,
+      "head": "c44933b1e84558c126115635f05227a4a273f18f",
+      "tree": "e266bae5bc8df774258a3ba883fa55f36f467b90",
+      "dependencyVersions": {
+        "node": "v24.20.0",
+        "thirdParty": []
+      },
+      "evaluator": "acceptance/multi-module.mjs",
+      "offlineControls": {
+        "starterExit": 1,
+        "referenceExit": 0,
+        "tamperedLocalExit": 0,
+        "independentAfterTamperExit": 1,
+        "rejectedPathChanges": [
+          "tests/check.mjs",
+          "unexpected.mjs"
+        ]
+      }
+    },
+    {
+      "id": "regression-sensitive",
+      "category": "Regression-sensitive task",
+      "description": "Fix src/expiry.mjs so a coupon remains eligible on its expiration date. Preserve all existing behavior: dates before expiration remain eligible for enabled coupons, dates after expiration and disabled coupons are ineligible, and null expiration never expires when enabled. Inputs are calendar dates in YYYY-MM-DD format or a null expiration.\n\nEdit only src/expiry.mjs. Keep the test and configuration files unchanged. Use no external dependencies. The check is node tests/check.mjs.\n\nAcceptance:\n- An enabled coupon is eligible before and on its expiration date, and ineligible after it.\n- Disabled coupons are ineligible. Null expiration leaves an enabled coupon eligible.",
+      "acceptance": [
+        "An enabled coupon is eligible before and on its expiration date, and ineligible after it.",
+        "Disabled coupons are ineligible. Null expiration leaves an enabled coupon eligible."
+      ],
+      "scope": [
+        "src/expiry.mjs"
+      ],
+      "direct": false,
+      "head": "fd7b28af6cf6926993606abfda1ee3d21ed47600",
+      "tree": "72b958e871486a395de78e832e3a34499a2d53c7",
+      "dependencyVersions": {
+        "node": "v24.20.0",
+        "thirdParty": []
+      },
+      "evaluator": "acceptance/regression-sensitive.mjs",
+      "offlineControls": {
+        "starterExit": 1,
+        "referenceExit": 0,
+        "tamperedLocalExit": 0,
+        "independentAfterTamperExit": 1,
+        "rejectedPathChanges": [
+          "tests/check.mjs",
+          "unexpected.mjs"
+        ]
+      }
+    }
+  ],
+  "plan": {
+    "verify": "node tests/check.mjs",
+    "timeoutMs": 240000,
+    "maxWorkerAttempts": 1,
+    "formalPlan": [
+      {
+        "backend": "codex",
+        "task": "small-bug",
+        "order": [
+          [
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_DIRECT",
+            "C_V2_MANAGED"
+          ],
+          [
+            "B_LEGACY",
+            "C_V2_DIRECT",
+            "C_V2_MANAGED",
+            "A_NATIVE"
+          ],
+          [
+            "C_V2_DIRECT",
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ]
+        ]
+      },
+      {
+        "backend": "codex",
+        "task": "simple-feature",
+        "order": [
+          [
+            "B_LEGACY",
+            "C_V2_DIRECT",
+            "C_V2_MANAGED",
+            "A_NATIVE"
+          ],
+          [
+            "C_V2_DIRECT",
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ],
+          [
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_DIRECT"
+          ]
+        ]
+      },
+      {
+        "backend": "codex",
+        "task": "medium-refactor",
+        "order": [
+          [
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ],
+          [
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_MANAGED"
+          ],
+          [
+            "B_LEGACY",
+            "C_V2_MANAGED",
+            "A_NATIVE"
+          ]
+        ]
+      },
+      {
+        "backend": "codex",
+        "task": "multi-module",
+        "order": [
+          [
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_MANAGED"
+          ],
+          [
+            "B_LEGACY",
+            "C_V2_MANAGED",
+            "A_NATIVE"
+          ],
+          [
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ]
+        ]
+      },
+      {
+        "backend": "codex",
+        "task": "regression-sensitive",
+        "order": [
+          [
+            "B_LEGACY",
+            "C_V2_MANAGED",
+            "A_NATIVE"
+          ],
+          [
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ],
+          [
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_MANAGED"
+          ]
+        ]
+      },
+      {
+        "backend": "claude",
+        "task": "small-bug",
+        "order": [
+          [
+            "B_LEGACY",
+            "C_V2_DIRECT",
+            "C_V2_MANAGED",
+            "A_NATIVE"
+          ],
+          [
+            "C_V2_DIRECT",
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ],
+          [
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_DIRECT"
+          ]
+        ]
+      },
+      {
+        "backend": "claude",
+        "task": "simple-feature",
+        "order": [
+          [
+            "C_V2_DIRECT",
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ],
+          [
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_DIRECT"
+          ],
+          [
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_DIRECT",
+            "C_V2_MANAGED"
+          ]
+        ]
+      },
+      {
+        "backend": "claude",
+        "task": "medium-refactor",
+        "order": [
+          [
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_MANAGED"
+          ],
+          [
+            "B_LEGACY",
+            "C_V2_MANAGED",
+            "A_NATIVE"
+          ],
+          [
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ]
+        ]
+      },
+      {
+        "backend": "claude",
+        "task": "multi-module",
+        "order": [
+          [
+            "B_LEGACY",
+            "C_V2_MANAGED",
+            "A_NATIVE"
+          ],
+          [
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ],
+          [
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_MANAGED"
+          ]
+        ]
+      },
+      {
+        "backend": "claude",
+        "task": "regression-sensitive",
+        "order": [
+          [
+            "C_V2_MANAGED",
+            "A_NATIVE",
+            "B_LEGACY"
+          ],
+          [
+            "A_NATIVE",
+            "B_LEGACY",
+            "C_V2_MANAGED"
+          ],
+          [
+            "B_LEGACY",
+            "C_V2_MANAGED",
+            "A_NATIVE"
+          ]
+        ]
+      }
+    ],
+    "plannedFormalTrials": 102,
+    "isolatedWindows": {
+      "state": "BLOCKED",
+      "trials": []
+    }
+  },
+  "trials": [],
+  "totalLiveModelCallsInBenchmark": 0,
+  "aggregate": null,
+  "unmeasured": [
+    "successRate",
+    "workerCalls",
+    "routerCalls",
+    "reviewerCalls",
+    "diagnosisCalls",
+    "retryCount",
+    "inputTokens",
+    "cachedInputTokens",
+    "outputTokens",
+    "durationMs",
+    "exitCodes",
+    "candidateTree",
+    "verificationOverhead",
+    "routerOverhead",
+    "reviewerOverhead",
+    "estimatedApiCost",
+    "subscriptionConsumption",
+    "tokensPerVerifiedTask",
+    "timePerVerifiedTask"
+  ]
+}

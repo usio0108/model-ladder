@@ -135,6 +135,7 @@ model-ladder 目前為 **Beta**：行為、設定與檔案結構可能隨版本�
 6. **查看結果**：通過驗證才算完成，報告會列出修改檔案、驗證結果與剩餘限制，預設不 commit 或 push。
 7. **交接與續跑**：需要時可要求建立交接文件，遇到用量停止則等額度重設，再依 `.model-ladder/HANDOFF.md` 續跑。
 8. **建立專案驗證流程**：model-ladder 內建源自 pstack 的 [`create-verification-skill`](skills/create-verification-skill/SKILL.md) 與 [`maintain-verification-skill`](skills/maintain-verification-skill/SKILL.md)，Codex plugin 也附有[對應版本](codex-skills/)。在 Claude Code 執行 `/model-ladder:create-verification-skill` 或 `/model-ladder:maintain-verification-skill`；在 Codex 請它使用 `create-verification-skill` 或 `maintain-verification-skill` skill。這些 skill 會為目標專案建立或維護專屬驗證 driver。本 repository 已有自己的 [`.agents/skills/verify/SKILL.md`](.agents/skills/verify/SKILL.md)，用途是驗證 model-ladder，不是替任意專案建立通用 driver。來源與授權請見[第三方 notice](NOTICE.zh-TW.md)。
+9. **Local Fast Path**：當 session 能指出任務只改的那一個檔案，且專案的 verify 指令能完整檢查結果時，model-ladder 不啟動 router、worker 與 verifier agent，改由 session 直接修改，再在該 snapshot 上執行 verify 指令。其他任務照舊走 ladder。執行 `node scripts/telemetry.mjs` 可彙總過去執行的實測 token 與品質。請見 [native-first workflow](docs/architecture/native-first-workflow.md)。
 
 報告範例、runner 指令、並行執行與執行檔案位置見[進階使用](USAGE.zh-TW.md)，panel 操作見 [Band](#bandclaude-code)。
 

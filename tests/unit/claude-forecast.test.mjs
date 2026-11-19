@@ -33,7 +33,10 @@ test('Claude preflight, real boundary CLI, workflow journal and finish persist c
     calls.push(opts.label.split(' ')[0])
     if (opts.label.startsWith('route')) return route
     if (opts.label.startsWith('worker')) return { status: 'done', worktreePath: dir, filesChanged: [], summary: 'Empty repository', selfCheck: 'inspected', blockedReason: null }
-    return { pass: true, reason: 'Inspected repository', output: '', usage: '{}' }
+    // The real verifier runs the candidate helper around its checks; finish rejects a verdict without that proof.
+    const helper = /snapshot helper immediately before step 3: (.+) before\n/.exec(_prompt)[1]
+    const tree = ['before', 'after'].map((phase) => execFileSync(`${helper} ${phase}`, { cwd: dir, encoding: 'utf8', shell: true }).trim()).at(-1)
+    return { pass: true, reason: 'Inspected repository', output: '', workerFiles: [], candidateTree: tree, usage: '{}' }
   }
   let journeys = 0
   async function journey() {
@@ -89,7 +92,7 @@ test('Claude preflight, real boundary CLI, workflow journal and finish persist c
       }
       args.journal = result.journal
     }
-    assert.equal(result.status, 'VERIFIED')
+    assert.equal(result.status, 'CANDIDATE')
     const state = read(statePath)
     assert.deepEqual(state.forecast.original, firstForecast)
     assert.deepEqual(state.forecast.phases.map((p) => p.phase), ['route', 'worker', 'verify'])
@@ -97,6 +100,8 @@ test('Claude preflight, real boundary CLI, workflow journal and finish persist c
     assert.equal(state.forecast.current.usage.five_hour.status, 'unknown')
     run('finish', { task: 'Inspect fixture', runId: preflight.runId, result })
     const rows = readFileSync(join(dir, '.model-ladder/history.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+    assert.equal(rows.at(-1).status, 'VERIFIED')
+    assert.equal(rows.at(-1).error, null)
     assert.equal(rows.at(-1).forecast.actual.censored, false)
     assert.deepEqual(rows.at(-1).forecast.original, firstForecast)
     assert.equal(rows.at(-1).forecast.current.remaining.mostLikely, 0)
