@@ -1,6 +1,10 @@
 import '../helpers/isolate-home.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { inScope, parseTaskContract, taskPolicy, usageEvidence } from '../../scripts/task-contract.mjs'
 
 const root = process.cwd()
@@ -32,6 +36,14 @@ test('risk is independent of complexity and cannot be lowered by a requested pro
   assert.equal(mandated.profile, 'ISOLATED')
   assert.equal(inScope('src/app.mjs', ['src']), true)
   assert.equal(inScope('src-other/app.mjs', ['src']), false)
+})
+
+test('a repository named by its Windows 8.3 short path matches the Git root', { skip: process.platform !== 'win32' }, (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'model-ladder-long-directory-name-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const short = execFileSync('cmd.exe', ['/d', '/s', '/c', `"for %I in ("${dir}") do @echo %~sI"`], { encoding: 'utf8', windowsVerbatimArguments: true }).trim()
+  if (short.toLowerCase() === dir.toLowerCase()) return t.skip('8.3 names are disabled on this volume')
+  assert.equal(taskPolicy(task({ repository: short }), dir, []).profile, 'DIRECT')
 })
 
 test('one backend with incomplete usage does not turn unknown token fields into zero', () => {

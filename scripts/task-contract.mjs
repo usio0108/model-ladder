@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { canonical, isProtected } from '../hooks/guard.mjs'
 
@@ -61,7 +61,8 @@ const sensitivePath = /(?:^|\/)(?:\.github|\.claude|\.codex|\.aws|\.ssh|\.env(?:
 const sensitiveTask = /\b(?:drop|truncate|wipe|delete|destroy|rm\s+-|migrat\w*|credential\w*|secret\w*|sandbox|auth(?:entication|orization)?|permissions?|deploy\w*|publish\w*|production|release|push|upload|download|curl|webhook|security)\b|(?:刪除|清空|憑證|密鑰|權限|遷移|部署|發布|上傳|外部網路)/iu
 
 export function taskPolicy(contract, root, protectedPatterns, { configuredNetwork = false, requireSandbox = false } = {}) {
-  if (pathKey(realpathSync(root)) !== pathKey(realpathSync(contract.repository))) throw new Error('Contract repository does not match the current Git root')
+  // canonical uses realpathSync.native, which also expands Windows 8.3 names (RUNNER~1) that the JS realpath keeps on Node 20.
+  if (!existsSync(contract.repository) || pathKey(canonical(root)) !== pathKey(canonical(contract.repository))) throw new Error('Contract repository does not match the current Git root')
   for (const path of [...contract.scope, ...contract.protectedPaths]) {
     const resolved = relative(canonical(root), canonical(resolve(root, path)))
     if (!resolved || isAbsolute(resolved) || resolved === '..' || resolved.startsWith(`..${sep}`)) throw new Error(`Contract path escapes the repository: ${JSON.stringify(path)}`)
