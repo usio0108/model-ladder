@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { writeHandoff } from '../../scripts/codex-handoff.mjs'
-import { activeRuns, registerRun, unregisterRun } from '../../scripts/usage-guard.mjs'
+import { activeDir, activeRuns, registerRun, unregisterRun } from '../../scripts/usage-guard.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 const read = (file) => readFileSync(join(root, file), 'utf8')
@@ -64,7 +64,9 @@ test('finish --handoff writes a template from the last history entry, and says s
 
 // A live process registered as another model-ladder run on this machine (the registry is isolated per test process).
 function otherRun(otherRoot, runId) {
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+  // Like the real runner on POSIX: SIGTERM ends it and removes its registration, which acknowledges the stop.
+  const registration = join(activeDir(), `${runId}.json`)
+  const child = spawn(process.execPath, ['-e', `process.on('SIGTERM', () => { require('fs').rmSync(${JSON.stringify(registration)}, { force: true }); process.exit(0) }); setInterval(() => {}, 1000)`], { stdio: 'ignore' })
   const exited = new Promise((resolve) => child.once('exit', () => resolve(true)))
   writeFileSync(join(otherRoot, '.model-ladder', 'live.json'), JSON.stringify({ runId, task: 'other task', input: { task: 'other task' }, agents: [{ phase: 'verify', model: 'luna', effort: 'low', startedAt: '2026-10-29T00:00:00.000Z', endedAt: null }] }))
   registerRun({ runId, pid: child.pid, root: otherRoot, runtime: 'codex' })
