@@ -31,7 +31,7 @@ function fixture(scenario, overrides = {}) {
   write('.codex/model-ladder.json', JSON.stringify({
     router: { model: 'cheap', effort: 'low' }, verifier: { model: 'cheap', effort: 'low' },
     tiers: [{ model: 'cheap', efforts: ['low', 'medium', 'high'], maxEffortJump: 1 }, { model: 'strong', efforts: ['low', 'high'], maxEffortJump: 1 }],
-    verify: 'node --test tests/check.test.mjs', maxAttempts: 3, ...overrides,
+    verify: 'node --test tests/check.test.mjs', maxAttempts: 3, direct_threshold: 'off', ...overrides,
   }))
   git(dir, 'add', '-A')
   git(dir, 'commit', '-qm', 'fixture')
