@@ -87,3 +87,83 @@ test('history attempts carry compact per-attempt skill reports', () => {
   assert.deepEqual(row.attempts[0].skills, [{ name: 'ponytail', applies: true, available: true, used: false, note: 'hook only' }])
   assert.equal('skills' in row.attempts[1], false)
 })
+
+// A real preflight + claim + candidate flow: a worker worktree that edited `files`, under a run that claimed `scope`.
+function claimedRun(scope, files, verify) {
+  const dir = mkdtempSync(join(tmpdir(), 'ml-finish-scope-'))
+  dirs.push(dir)
+  const run = (name, args, opts = {}) => spawnSync('node', [fileURLToPath(new URL(`../../scripts/${name}.mjs`, import.meta.url)), ...args], { cwd: dir, encoding: 'utf8', ...opts })
+  for (const args of [['init', '-q'], ['config', 'user.name', 't'], ['config', 'user.email', 't@t'], ['config', 'core.autocrlf', 'false']]) git(dir, ...args)
+  writeFileSync(join(dir, 'a.txt'), 'a\n')
+  writeFileSync(join(dir, '.gitignore'), '.model-ladder/\n.claude/worktrees/\n')
+  git(dir, 'add', '-A')
+  git(dir, 'commit', '-q', '-m', 'init')
+  const { runId } = JSON.parse(run('preflight', []).stdout)
+  assert.equal(JSON.parse(run('claim', [], { input: JSON.stringify({ runId, scope, readOnly: false }) }).stdout).status, 'READY')
+  const wt = join(dir, '.claude', 'worktrees', 'w')
+  git(dir, 'worktree', 'add', '-q', wt, '-b', 'worktree-w')
+  for (const file of files) writeFileSync(join(wt, file), 'changed\n')
+  const tree = (phase) => spawnSync('node', [script, '--candidate', runId, '1', phase], { cwd: wt, encoding: 'utf8' }).stdout.trim()
+  tree('before')
+  const result = {
+    status: 'CANDIDATE', tokens: 1,
+    plan: { goal: 'g', verify, start: 'haiku/low', startReason: 's', allowTests: false, allowTestsReason: 'r' },
+    attempts: [{ cell: 'haiku/low', pass: true, reason: 'ok', worktreePath: wt }],
+    winner: { worktreePath: wt, filesChanged: files, candidateTree: tree('after') },
+  }
+  return { dir, report: finish(dir, { task: 't', runId, result }) }
+}
+
+test('a legacy Claude candidate that changes a file outside the claimed scope is rejected and nothing is applied', () => {
+  const { dir, report } = claimedRun(['a.txt'], ['a.txt', 'b.txt'])
+  assert.match(report.stdout, /FAILED/)
+  assert.match(report.stdout, /b\.txt, outside the claimed scope/)
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'a\n')
+  assert.ok(!existsSync(join(dir, 'b.txt')))
+})
+
+test('a legacy Claude candidate whose changes are all inside the claimed scope is applied', () => {
+  const { dir, report } = claimedRun(['a.txt', 'src'], ['a.txt'])
+  assert.match(report.stdout, /VERIFIED/)
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'changed\n')
+})
+
+const lastHistory = (dir) => JSON.parse(readFileSync(join(dir, '.model-ladder', 'history.jsonl'), 'utf8').trim().split('\n').at(-1))
+
+test('plan.verify exit 0 applies the candidate and records the command evidence', () => {
+  const { dir, report } = claimedRun(['a.txt'], ['a.txt'], 'node -e "console.log(1)"')
+  assert.match(report.stdout, /VERIFIED/)
+  assert.match(report.stdout, /Command +node -e .*exit 0.*HOST_UNSANDBOXED/)
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'changed\n')
+  const { command } = lastHistory(dir)
+  assert.equal(command.exitCode, 0)
+  assert.equal(command.sandbox, 'HOST_UNSANDBOXED')
+  assert.equal(command.stdout.trim(), '1')
+  assert.equal(typeof command.durationMs, 'number')
+})
+
+test('plan.verify exit 1 applies nothing, reports the exit code and keeps the evidence in history', () => {
+  const { dir, report } = claimedRun(['a.txt'], ['a.txt'], 'node -e "console.error(\'boom\');process.exit(1)"')
+  assert.match(report.stdout, /FAILED/)
+  assert.match(report.stdout, /Verify command exited 1/)
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'a\n')
+  const row = lastHistory(dir)
+  assert.equal(row.applied, false)
+  assert.equal(row.command.exitCode, 1)
+  assert.match(row.command.stderr, /boom/)
+})
+
+test('plan.verify that changes the candidate worktree is rejected', () => {
+  const { dir, report } = claimedRun(['a.txt', 'c.txt'], ['a.txt'], 'node -e "require(\'fs\').writeFileSync(\'c.txt\',\'x\')"')
+  assert.match(report.stdout, /Verify command changed the candidate tree/)
+  assert.ok(!existsSync(join(dir, 'c.txt')))
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'a\n')
+  assert.equal(lastHistory(dir).command.exitCode, 0)
+})
+
+test('without plan.verify nothing runs and the evidence is null', () => {
+  const { dir, report } = claimedRun(['a.txt'], ['a.txt'], '')
+  assert.match(report.stdout, /VERIFIED/)
+  assert.doesNotMatch(report.stdout, /Command /)
+  assert.equal(lastHistory(dir).command, null)
+})

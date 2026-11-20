@@ -4,6 +4,20 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [1.3.2] - 2026-11-20
+
+- **Finish checks the claimed scope.** Legacy Claude finish rejects a candidate that changes a file outside the scope the run claimed, the same rule contract runs and the fast path already apply.
+- **Finish runs the verify command.** Before applying a candidate, Claude finish runs the plan's `verify` command in the candidate worktree. A nonzero exit, a timeout or a changed candidate tree blocks the change, and history records the command, exit code and output tail in `command`.
+- **Failure kinds for every run.** Legacy Codex and Claude runs record `failure` on each failed attempt with the same classifier as contract runs (`failureKindOf`). An agent that dies on its context limit stops the run without a diagnosis.
+- **Repeated failures stop early.** Legacy Codex and Claude runs stop before the LLM diagnosis when a failure has the same candidate tree and the same reason as the previous attempt (`repeatsFailure`). A different failure is still diagnosed.
+- **Per-run handoff.** Every handoff is also written to `.model-ladder/runs/<runId>.HANDOFF.md`, so concurrent runs keep their own handoff. The shared `.model-ladder/HANDOFF.md` and `live.json` still show the latest run only.
+- Codex usage is summed from every streamed `turn.completed` event instead of the bounded stdout tail, so long runs no longer lose usage.
+- The fast path `check` rechecks for an active ladder run before it verifies.
+- `tests/e2e/bench.mjs` shows missing cost and output tokens as `UNKNOWN`, sums only measured values and reports how many rows were excluded.
+- CI has a lint job: a syntax check of every tracked script and a generated-rule drift check (`sync-rules.mjs --check`).
+- CI runs ESLint (`@eslint/js` recommended, installed on the fly so `package.json` gains no dependency) and a CodeQL security scan on push, pull requests and weekly.
+- The READMEs are shorter; the detail moved to `USAGE`. The README credits pstack for the project verification skill generator.
+
 ## [1.3.1] - 2026-11-20
 
 - **DIRECT no longer depends on context size.** The router's `small` judgment alone decides DIRECT; the session's context percentage no longer gates it. Before, a small task in a fresh session (for example 6% of a 1M window against a 40% threshold) still ran the full router, worker and verifier. Read-only questions, explanations and analysis now count as `small`. `forceLadder` still disables DIRECT, and a DIRECT result is still verified independently.

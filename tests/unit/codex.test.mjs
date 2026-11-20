@@ -882,6 +882,8 @@ test('usage over the global usageGuard threshold mid-agent force-stops the Codex
     assert.match(result.message, /60%.*50%/)
     assert.ok(elapsed < 15000, `stopped mid-agent, not after it (${elapsed}ms)`)
     assert.deepEqual(calls(dir).map((c) => c.phase), ['route', 'worker'], 'no verifier, diagnosis or next worker')
+    // The runner reports the real temp path (/private/var on macOS, long names on Windows), so compare the run-relative tail.
+    assert.ok(result.handoffPath.endsWith(join('.model-ladder', 'runs', `${result.runId}.HANDOFF.md`)), result.handoffPath)
     const handoff = readFileSync(result.handoffPath, 'utf8')
     assert.equal(read(dir, '.model-ladder/HANDOFF.md'), handoff)
     assert.match(handoff, /Fix greeting typo/)
@@ -1317,6 +1319,16 @@ test('network on: the diagnose prompt no longer calls network failures environme
   assert.match(onPrompt, /only inside the worktree/)
 })
 
+test('a legacy failure identical to the previous one stops without another diagnosis', async () => {
+  const dir = fixture({ alwaysFail: true }, { maxAttempts: 3 })
+  const result = await run(dir)
+  assert.equal(result.status, 'STOPPED', JSON.stringify(result))
+  assert.match(result.message, /Repeated failure/)
+  // the first failure is still diagnosed; the identical second one is not
+  assert.deepEqual(calls(dir).map((c) => c.phase).filter((p) => p === 'diagnose' || p === 'worker'), ['worker', 'diagnose', 'worker'])
+  cleaned(dir)
+})
+
 test('verify command and verifier run in a fresh worktree without the worker\'s ignored files', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'ml-verify-wt-'))
   dirs.push(scratch)
@@ -1345,5 +1357,32 @@ test('verify command and verifier run in a fresh worktree without the worker\'s 
   assert.deepEqual(result.outcome.files, ['greeting.mjs'])
   assert.match(read(dir, 'greeting.mjs'), /Welcome/)
   assert.equal(existsSync(join(dir, '.pytest_cache')), false)
+  cleaned(dir)
+})
+
+test('a legacy failure is classified into attempt.failure and still diagnosed', async () => {
+  const dir = fixture({ verifyPass: false, verifyReason: 'permission denied writing cache' }, { maxAttempts: 2 })
+  const result = await run(dir)
+  assert.equal(result.attempts[0].failure, 'PERMISSION_FAILURE')
+  assert.ok(calls(dir).some((c) => c.phase === 'diagnose'))
+  assert.equal(JSON.parse(read(dir, '.model-ladder/history.jsonl').trim()).attempts[0].failure, 'PERMISSION_FAILURE')
+  cleaned(dir)
+})
+
+test('a legacy CONTEXT_LIMIT failure stops without a diagnosis', async () => {
+  const dir = fixture({ environment: 'worker', environmentMessage: 'maximum context window exceeded' }, { maxAttempts: 3 })
+  const result = await run(dir)
+  assert.equal(result.status, 'STOPPED', JSON.stringify(result))
+  assert.match(result.message, /Context limit/)
+  assert.equal(result.attempts[0].failure, 'CONTEXT_LIMIT')
+  assert.ok(!calls(dir).some((c) => c.phase === 'diagnose'))
+  cleaned(dir)
+})
+
+test('a legacy verdict that only mentions a context window is still diagnosed', async () => {
+  const dir = fixture({ verifyPass: false, verifyReason: 'context window percentage is not shown' }, { maxAttempts: 2 })
+  const result = await run(dir)
+  assert.equal(result.attempts[0].failure, 'CONTEXT_LIMIT')
+  assert.ok(calls(dir).some((c) => c.phase === 'diagnose'))
   cleaned(dir)
 })

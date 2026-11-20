@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { canonical, isProtected } from '../hooks/guard.mjs'
+import { failureKindOf } from './ladder-rules.mjs'
 
 const profiles = ['DIRECT', 'MANAGED', 'ISOLATED']
 const effects = ['destructive', 'credentials', 'security', 'network', 'deployment', 'migration', 'hard-rollback']
@@ -95,9 +96,6 @@ export function failureKind(error) {
   if (error.code === 'USAGE_LIMIT') return 'QUOTA_EXHAUSTED'
   if (error.code === 'TIMEOUT' || error.code === 'CANCELLED') return error.code
   if (typeof error.code === 'string' && error.code.startsWith('VERIFY_SANDBOX_')) return 'SANDBOX_DENIAL'
-  if (error.code === 'VERIFY_TOOL_UNAVAILABLE' || /not authenticated|unsupported model|model.{0,35}(?:not available|not found)|missing dependenc|node_modules is missing/i.test(error.message)) return 'ENVIRONMENT_FAILURE'
-  if (/context.{0,30}(?:length|window|limit)|maximum context/i.test(error.message)) return 'CONTEXT_LIMIT'
-  if (/permission denied|access denied|\bEPERM\b|\bEACCES\b/i.test(error.message)) return 'PERMISSION_FAILURE'
-  if (/sandbox/i.test(error.message)) return 'SANDBOX_DENIAL'
-  return 'TOOL_FAILURE'
+  if (error.code === 'VERIFY_TOOL_UNAVAILABLE') return 'ENVIRONMENT_FAILURE'
+  return failureKindOf(error.message)
 }

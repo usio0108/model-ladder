@@ -28,6 +28,12 @@ function needsNodeModules(root, verify) {
   } catch { return false }
 }
 
+// Shared by begin and check: a ladder run that started after begin must stop the fast path too.
+function activeRun(root) {
+  const active = readLocks(root).filter((lock) => !lock.stale)
+  return active.length ? { status: 'BLOCKED', errorCode: 'ACTIVE_RUN', runs: active.map((lock) => lock.runId), message: 'Another model-ladder run is active in this repository; use the ladder, which checks overlaps.' } : null
+}
+
 // Every begin failure is a JSON BLOCKED result, so the skill can always fall back to the ladder.
 export function begin(input, { cwd = process.cwd() } = {}) {
   try { return prepare(input, cwd) } catch (error) { return { status: 'BLOCKED', errorCode: 'FAST_PATH_UNAVAILABLE', message: error.message } }
@@ -50,8 +56,8 @@ function prepare(input, cwd) {
   if (uvSyncRequired(root, verify)) return { status: 'BLOCKED', errorCode: 'UV_SYNC_REQUIRED', ...summary, message: `Run uv sync in ${root} first.` }
   if (needsNodeModules(root, verify)) return { status: 'BLOCKED', errorCode: 'MISSING_DEPENDENCIES', ...summary, message: `${verify} needs node_modules, which the clean verification worktree does not have. Set verify to a command that needs no install.` }
   // The session edits the live checkout without a lock, so it runs only when no ladder run is active here.
-  const active = readLocks(root).filter((lock) => !lock.stale)
-  if (active.length) return { status: 'BLOCKED', errorCode: 'ACTIVE_RUN', ...summary, runs: active.map((lock) => lock.runId), message: 'Another model-ladder run is active in this repository; use the ladder, which checks overlaps.' }
+  const blocked = activeRun(root)
+  if (blocked) return { ...blocked, ...summary }
   // Uncommitted changes would enter the baseline unchecked (including protected files); the ladder asks about them.
   const dirty = withMutex(root, 'apply', () => git(root, 'status', '--porcelain', '--untracked-files=all', '--', '.', ':!.model-ladder', ':!.claude/worktrees'))
   if (dirty && input.allowDirty !== true) return { status: 'BLOCKED', errorCode: 'DIRTY', ...summary, files: dirty.split('\n').filter(Boolean).map((line) => line.slice(3)), message: 'The checkout has uncommitted changes.' }
@@ -83,6 +89,8 @@ export async function check(runId, { cwd = process.cwd(), terminate, signal } = 
   try {
     if (state.checks > contract.limits.maxAttempts) return Object.assign(result, { status: 'BLOCKED', errorCode: 'ATTEMPTS_EXHAUSTED', message: `The contract allows ${contract.limits.maxAttempts} checks; use the ladder.` })
     if (git(root, 'rev-parse', 'HEAD') !== baseCommit) return Object.assign(result, { status: 'BLOCKED', errorCode: 'HEAD_MOVED', message: 'HEAD changed since begin; start a new fast path.' })
+    const blocked = activeRun(root)
+    if (blocked) return Object.assign(result, blocked)
     const tree = withMutex(root, 'apply', () => snapshot(root, run, `candidate-${state.checks}`))
     const files = changed(root, baseTree, tree)
     Object.assign(evidence, { candidateTree: tree, files })

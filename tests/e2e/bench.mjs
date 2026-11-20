@@ -5,6 +5,7 @@
 // finished pairs are skipped on the next run unless --fresh, so an interrupted run resumes.
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { UNKNOWN, fmtCost, fmtTokens, summarize } from './bench-summary.mjs'
 import { SCENARIOS, git, observe, prepare, pytest, runClaude } from './scenarios.mjs'
 
 // Hardest first: if the quota runs out midway, the most telling pairs are already done.
@@ -70,7 +71,7 @@ for (const task of TASKS) {
       head: git(dir, 'rev-parse', '--short', 'HEAD'),
     })
     writeFileSync(RESULTS, `${JSON.stringify(results, null, 2)}\n`)
-    console.log(`${verdict.ok ? 'solved' : `FAILED (${verdict.why})`}  $${(out.total_cost_usd ?? 0).toFixed(2)}  ${Math.round(out.seconds)}s`)
+    console.log(`${verdict.ok ? 'solved' : `FAILED (${verdict.why})`}  ${fmtCost(out.total_cost_usd) === UNKNOWN ? UNKNOWN : `$${fmtCost(out.total_cost_usd)}`}  ${Math.round(out.seconds)}s`)
     if (verdict.ok) rmSync(dir, { recursive: true, force: true })
     else console.log(`  repo kept at ${dir}`)
   }
@@ -78,14 +79,10 @@ for (const task of TASKS) {
 
 console.log('\ntask         strategy       solved  list $   out tok   secs  ladder attempts')
 for (const r of results) {
-  console.log(`${r.task.padEnd(12)} ${r.strategy.padEnd(14)} ${(r.solved ? 'yes' : 'no').padEnd(7)} ${(r.cost ?? 0).toFixed(2).padStart(6)}  ${String(r.outputTokens).padStart(8)}  ${String(r.seconds).padStart(5)}  ${r.attempts?.join(' ') ?? ''}`)
+  console.log(`${r.task.padEnd(12)} ${r.strategy.padEnd(14)} ${(r.solved ? 'yes' : 'no').padEnd(7)} ${fmtCost(r.cost).padStart(7)}  ${fmtTokens(r.outputTokens).padStart(8)}  ${String(r.seconds).padStart(5)}  ${r.attempts?.join(' ') ?? ''}`)
 }
-console.log('\nstrategy       solved  total $  $ per solved  out tok  secs')
+console.log('\nstrategy       solved  total $  $ per solved  out tok  secs  excluded (UNKNOWN cost/tokens)')
 for (const strategy of Object.keys(STRATEGIES)) {
-  const rows = results.filter((r) => r.strategy === strategy)
-  const ok = rows.filter((r) => r.solved).length
-  const cost = rows.reduce((s, r) => s + (r.cost ?? 0), 0)
-  const tokens = rows.reduce((s, r) => s + r.outputTokens, 0)
-  const secs = rows.reduce((s, r) => s + r.seconds, 0)
-  console.log(`${strategy.padEnd(14)} ${`${ok}/${rows.length}`.padEnd(7)} ${cost.toFixed(2).padStart(7)}  ${(ok ? cost / ok : 0).toFixed(2).padStart(12)}  ${String(tokens).padStart(7)}  ${String(secs).padStart(4)}`)
+  const s = summarize(results.filter((r) => r.strategy === strategy))
+  console.log(`${strategy.padEnd(14)} ${`${s.solved}/${s.rows}`.padEnd(7)} ${fmtCost(s.cost).padStart(7)}  ${fmtCost(s.perSolved).padStart(12)}  ${fmtTokens(s.tokens).padStart(7)}  ${String(s.secs).padStart(4)}  ${s.costExcluded}/${s.tokensExcluded}`)
 }

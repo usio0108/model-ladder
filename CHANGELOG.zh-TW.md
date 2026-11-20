@@ -4,6 +4,20 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [1.3.2] - 2026-11-20
+
+- **Finish 檢查 claim 的範圍。** Legacy Claude finish 會拒絕改到 run 所 claim 範圍以外檔案的 candidate，與 contract run 和 fast path 的規則一致。
+- **Finish 執行 verify 指令。** Claude finish 套用候選結果前，會在候選 worktree 執行計畫的 `verify` 指令。退出碼非零、逾時或候選 tree 被改動都會擋下變更，history 的 `command` 欄位記錄指令、退出碼與輸出尾段。
+- **所有 run 都記錄失敗類型。** Legacy Codex 與 Claude run 在每次失敗的嘗試記錄 `failure`，與 contract run 共用同一個分類器（`failureKindOf`）。Agent 因 context 用盡而中止時，run 直接停止、不做診斷。
+- **重複的失敗提早停止。** Legacy Codex 與 Claude run 在失敗的 candidate tree 與原因都和上一次相同時（`repeatsFailure`），會在 LLM 診斷前停止。不同的失敗仍會診斷。
+- **每個 run 自己的 handoff。** handoff 會另外寫到 `.model-ladder/runs/<runId>.HANDOFF.md`，並行的 run 各自保留自己的 handoff。共用的 `.model-ladder/HANDOFF.md` 與 `live.json` 仍只顯示最新一次 run。
+- Codex 用量改由每個串流的 `turn.completed` 事件加總，不再只看有上限的 stdout 尾段，長時間的 run 不會再漏算用量。
+- Fast path 的 `check` 在驗證前會再次確認是否有進行中的 ladder run。
+- `tests/e2e/bench.mjs` 將缺少的 cost 與 output tokens 顯示為 `UNKNOWN`，只加總有實測值的項目，並列出因此排除的筆數。
+- CI 新增 lint job：檢查所有受版控 script 的語法，以及產生的規則是否與來源一致（`sync-rules.mjs --check`）。
+- CI 執行 ESLint（`@eslint/js` recommended，執行時才安裝，`package.json` 不新增依賴）以及 CodeQL 安全掃描（push、pull request 與每週一次）。
+- README 精簡，細節移到 `USAGE`。README 註明專案驗證 skill 產生器源自 pstack。
+
 ## [1.3.1] - 2026-11-20
 
 - **DIRECT 不再看 context 大小。** 是否走 DIRECT 只由 router 的 `small` 判斷決定，不再看 session 的 context 百分比。以前即使是小任務，在剛開的 session（例如 1M window 用了 6%，門檻 40%）仍會跑完整的 router、worker 與 verifier。只讀的問題、解釋與分析類任務現在都算 `small`。`forceLadder` 仍會關閉 DIRECT，DIRECT 的結果仍會獨立驗證。

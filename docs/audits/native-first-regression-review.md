@@ -7,7 +7,6 @@
 | ID | Severity | Finding |
 | --- | --- | --- |
 | 2.10 | LOW | `scripts/telemetry.mjs` `measure` repeats the `usageEvidence` summing rule. The copy reports a no-call stage as `0` where `usageEvidence` reports `UNKNOWN`. A shared helper would change v2 output. |
-| — | LOW | A lock created after `fast-path.mjs begin` is not detected until `check` sees its changes. `begin` only checks active locks once. Overlapping edits still fail `check`. |
 
 ## Not verified
 

@@ -42,7 +42,6 @@ export function hudText(state, width = 80, { now = Date.now(), guard = { enabled
   // Expanded shows every visible agent of the run; collapsed shows only the selected one.
   const base = expanded ? { ...state, agents } : current
   const frame = renderLive(base, { width, now, guard, color }).split('\n')
-  const context = state?.context
   const ctx = ` · ${formatContext(state?.context) || 'ctx ?'}`
   const tail = notice ? ` · ${notice}` : ''
   const keys = ` · G:${guard.enabled ? 'on' : 'off'} ^]/Alt+H handoff ^\\ ${expanded ? 'collapse' : 'expand'}`

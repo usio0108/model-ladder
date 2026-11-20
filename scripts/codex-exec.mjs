@@ -114,12 +114,13 @@ export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeou
   const args = [...(executable?.prefixArgs ?? []), 'exec', '-m', cell.model, '-c', `model_reasoning_effort=${JSON.stringify(cell.effort)}`, ...shellEnv, ...(network || forceOffline ? ['-c', `sandbox_workspace_write.network_access=${network && !forceOffline}`] : []),
     ...(forceOffline ? ['-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.writable_roots=[]'] : []),
     '-C', cwd, '--json', '--output-schema', schemaPath, '-o', outputPath, '--sandbox', sandbox, '-']
-  let result, events = [], pending = ''
+  let result, events = [], pending = '', usage = []
   try {
     result = await processRun(executable?.command ?? process.env.CODEX_BINARY ?? 'codex', args, { cwd, input: `This is one internal model-ladder role. Do not invoke model-ladder skills, workflows or runners recursively; perform only the assigned role.\n\n${prompt}`, timeoutMs, signal, terminate, env: { ...env, MODEL_LADDER_ROLE: phase, MODEL_LADDER_AUTORUN: '0', MODEL_LADDER_BAND: '0' }, onStdout: (data) => {
       const lines = (pending + data).split('\n'); pending = lines.pop()
       for (const line of lines) try {
         const event = JSON.parse(line)
+        if (event.type === 'turn.completed') usage.push(event.usage ?? {})
         if (event.type.startsWith('item.') && event.item?.type === 'command_execution' && typeof event.item.command === 'string') onActivity?.(`Command: ${event.item.command}`)
       } catch {}
     } })
@@ -130,7 +131,9 @@ export async function codexExec({ phase, cell, cwd, run, prompt, sandbox, timeou
   } finally {
     if (result) {
       events = (result.stdout ?? '').split('\n').flatMap((line) => { try { return [JSON.parse(line)] } catch { return [] } })
-      result.usage = events.filter((event) => event.type === 'turn.completed').map((event) => event.usage ?? {})
+      // The last line may lack a trailing newline, so it is still pending.
+      try { const last = JSON.parse(pending); if (last.type === 'turn.completed') usage.push(last.usage ?? {}) } catch {}
+      result.usage = usage
       const logId = `${phase}-${randomUUID()}`
       writeFileSync(join(run, `${logId}.events.jsonl`), result.stdout ?? '')
       if (result.stderr) writeFileSync(join(run, `${logId}.stderr.txt`), result.stderr)

@@ -209,4 +209,17 @@ function dropUnachievableAcceptance(items) {
   })
 }
 
-export { legalMoves, defaultMove, pickMove, isCell, isDirect, protectedPatterns, ARTIFACTS, durationForecast, remainingForecast, assessUsage, consumptionEvidence, calibrationError, usageRisk, dropUnachievableAcceptance }
+// Same candidate tree and same reason as the previous failure: another diagnosis would only repeat itself.
+function repeatsFailure(previous, current) {
+  return Boolean(previous && current) && ['tree', 'reason'].every((key) => current[key] && previous[key] === current[key])
+}
+// Message-only failure classification, shared by contract and legacy runs.
+function failureKindOf(message) {
+  if (/not authenticated|unsupported model|model.{0,35}(?:not available|not found)|missing dependenc|node_modules is missing/i.test(message)) return 'ENVIRONMENT_FAILURE'
+  if (/context.{0,30}(?:length|window|limit)|maximum context/i.test(message)) return 'CONTEXT_LIMIT'
+  if (/permission denied|access denied|\bEPERM\b|\bEACCES\b/i.test(message)) return 'PERMISSION_FAILURE'
+  if (/sandbox/i.test(message)) return 'SANDBOX_DENIAL'
+  return 'TOOL_FAILURE'
+}
+
+export { legalMoves, defaultMove, pickMove, isCell, isDirect, protectedPatterns, ARTIFACTS, durationForecast, remainingForecast, assessUsage, consumptionEvidence, calibrationError, usageRisk, dropUnachievableAcceptance, repeatsFailure, failureKindOf }

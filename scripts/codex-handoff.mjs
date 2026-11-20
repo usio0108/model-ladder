@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { artifactDir } from './common.mjs'
 
@@ -47,6 +47,12 @@ export function writeHandoff(root, { stopped = null, live: suppliedLive = null, 
     'Use the packaged codex-run.mjs with this JSON input (a checkpoint resumes an unverified draft). A force-stopped process may have no checkpoint; inspect its retained draft before restarting the original input:', '',
     '```json', JSON.stringify(resume, null, 2), '```', '']
   const path = join(dir, 'HANDOFF.md')
-  writeFileSync(path, lines.join('\n'))
-  return path
+  const text = lines.join('\n')
+  writeFileSync(path, text)
+  // The shared file is latest-writer only; the per-run copy survives other runs' handoffs.
+  if (!live.runId) return path
+  mkdirSync(join(dir, 'runs'), { recursive: true })
+  const own = join(dir, 'runs', `${live.runId}.HANDOFF.md`)
+  writeFileSync(own, text)
+  return own
 }

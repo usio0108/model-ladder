@@ -1,6 +1,8 @@
 # 進階使用
 
-[README](README.zh-TW.md#使用方式) · [English](USAGE.md) · [設計](DESIGN.zh-TW.md)
+[README](README.zh-TW.md) · [English](USAGE.md) · [設計](DESIGN.zh-TW.md)
+
+目錄：[功能](#功能) · [安裝補充](#安裝補充) · [需求](#需求與相容性) · [隱私](#它會動到什麼與資料外送) · [解除安裝](#解除安裝) · [Beta 限制](#beta-狀態與已知限制) · [使用步驟](#使用步驟) · [設定](#進階設定) · [Band](#band-顯示與控制) · [使用量保護](#使用量保護細節)
 
 ## 執行報告
 
@@ -28,6 +30,12 @@ Claude 用量停止回傳 `USAGE_LIMIT`；Codex 回傳 `STOPPED` 與 `errorCode:
 以嘗試的 `pass` 和執行結果的 `status`、`outcome` 判斷是否可交付。個別命令或覆核通過後，快照完整性檢查仍可能拒絕該次嘗試。舊紀錄和擷取基準前就停止的執行可能沒有 `evidence`。
 
 證據欄位省略命令文字、程序輸出與模型評論。既有欄位與原始角色日誌可能含敏感資料，分享前請先檢查。
+
+### Claude 驗證證據
+
+Claude finish 套用候選結果前，會先確認變更檔案都在 claim 的範圍內，再於候選 worktree 執行計畫的 `verify` 指令。退出碼非零、超過 10 分鐘，或指令改動了候選 tree，都會擋下變更，執行結果為 `FAILED`。歷史紀錄的 `command` 欄位記錄指令、退出碼、耗時、`HOST_UNSANDBOXED` 以及 stdout、stderr 最後 4 KiB；計畫只有驗收條件時為 `null`。指令在 host shell 執行，因此 worktree 缺少檢查所需的依賴時，變更也會被擋下。
+
+每次失敗的嘗試都會記錄 `failure`：`ENVIRONMENT_FAILURE`、`CONTEXT_LIMIT`、`PERMISSION_FAILURE`、`SANDBOX_DENIAL` 或 `TOOL_FAILURE`。Worker 或 verifier 因 context 用盡而中止時，run 直接停止、不做診斷；其他類型只記錄，照常診斷。
 
 ### 要求原生驗證 Sandbox
 
@@ -83,7 +91,7 @@ Windows 需使用 PATH 或 `CODEX_BINARY` 指定的原生 `codex.exe`，不接�
 | 位置 | 內容 |
 |---|---|
 | `.model-ladder/runs/` | Run 鎖、Claude 暫存狀態、setup patch 與衝突 patch。 |
-| `.model-ladder/` | 共用歷史、live、usage、context 與 `HANDOFF.md`。 |
+| `.model-ladder/` | 共用歷史、live、usage、context 與 `HANDOFF.md`（最後寫入者；每個 run 另存 `runs/<runId>.HANDOFF.md`）。 |
 | `<system temp>/model-ladder/<repo hash>/codex-<uuid>/` | Codex worktree、記錄、輸出、snapshot、checkpoint 與 `result.json`。 |
 
 使用 runner 回傳的路徑，不要猜測。
@@ -131,6 +139,9 @@ DIRECT 不代表完成，必須遵守回傳的保護規則，獨立驗證後才�
 
 Claude 模型別名會使用可用版本，Codex 的模型 ID 與 effort 請依帳戶調整。
 Claude 外掛選單提供 DIRECT 值 `on` 與 `off`。
+不需建立設定檔，使用預設值即可執行。Claude Code 開啟 `/plugin configure model-ladder`，其中 `worker_skills` 為 **Worker skill instructions**、`verifier_skills` 為 **Verifier skill instructions**；Claude 若需在外掛介面以外設定，使用 `~/.claude/model-ladder.json`。Codex 編輯 `~/.codex/model-ladder.json`。
+專案的 `.claude/model-ladder.json` 或 `.codex/model-ladder.json` 優先於個人設定，使用量保護建議放個人檔，除非專案需要覆寫。
+worker 須逐項回報 `worker_skills` 中指名的能力；適用且可用卻未使用時，該次嘗試判為失敗。
 未指定 `verify` 時，Codex 優先使用專案驗證 skill，再尋找既有 npm、pytest、Cargo、Go、Maven 或 Make 檢查。
 
 ### Codex sandbox：uv 與 Node 專案
@@ -161,9 +172,41 @@ Claude 外掛角色指示作為預設，專案同名鍵可覆蓋，空字串也�
 缺少能力時會在執行前及最終報告提醒，例如：`ponytail` 在這個專案無法使用。
 角色指示可指定 skills、plugins、slash commands 或 MCP server，但不能擴大權限、允許 verifier 修改或遞迴呼叫 ladder。
 
-## Band 與 panel 詳細說明
+```json
+{
+  "worker_skills": "model-ladder: 寫程式時使用 <skills> 簡化程式碼。",
+  "verifier_skills": "model-ladder: 使用 <skills> 審查，不修改檔案。"
+}
+```
 
-基本欄位與控制項見 [README](README.zh-TW.md#bandclaude-code)。
+## Band 顯示與控制
+
+Band 顯示在 Claude Code 的 prompt 上方，需要 Claude Code 2.1.290+。
+
+```text
+▴ 🟢 model-ladder ── 2h/5h 15% · 3d/7d 44% · ctx 287k/1M (28.7%)
+▸ worker use ponytail when coding
+model/effort        act./est.  task
+haiku-5.5/low       5s         Summarize the README install steps
+[usage guard: on]  threshold [90] %  [handoff now]
+```
+
+| 顯示或控制 | 說明 |
+|---|---|
+| 使用量 | 各額度視窗顯示重設倒數、視窗長度與使用百分比。 |
+| Context | `ctx 287k/1M (28.7%)` 顯示已用 token、視窗上限與百分比，token 未知時只顯示上限。 |
+| 狀態 | 🟢 worker 或 router、🔵 verifier、🔴 重試中的 worker，任務列的 `✓` 表示已結束。 |
+| 任務列 | 顯示模型、effort、耗時（worker、test-writer、verifier 列另外顯示「/」與自己的預期時長，來自歷史或 router 給的分鐘數；其他列只顯示耗時）與任務；本 session 主迴圈啟動的每個進行中背景工作各有一列 `background`（見下）。 |
+| `▴` / `▾` | 收合或展開 Band。 |
+| 指示箭頭 | 只顯示生效指示且不加 `skill instructions:` 前綴，預設收成一行，以 `▸` 展開、`▾` 收合。 |
+| `usage guard` | 開關使用量保護。任一用量視窗達到門檻時，Band 會自動交接一次（同 `handoff now`），該視窗降回門檻以下或重設後才會再次交接。 |
+| `threshold` | 設定 1–100% 門檻，按 Enter 或停止輸入 5 秒後儲存。 |
+| `handoff now` | 寫入交接模板並執行 `/model-ladder:handoff`，讓主 session 改寫，不取消目前 run。 |
+
+保護控制寫入個人設定，專案若有覆寫仍以專案設定為準。
+Codex 使用獨立 terminal panel 且不顯示 context，輸入 `g` 切換保護、`t 90` 設門檻、`h` 寫交接模板、`q` 關閉 panel，每項指令後按 Enter。
+
+## Band 與 panel 詳細說明
 
 | 細節 | 行為 |
 |---|---|
@@ -185,6 +228,8 @@ Hook 信任適用於目前的定義與內容：更新後請在 Codex CLI 開啟 
 
 ## 使用量保護細節
 
+預設開啟，5 小時或每週用量門檻為 90%。使用 Band 控制項，或 Codex panel 的 `g`、`t 90` 調整。偵測到用量停止條件時回報 `USAGE_LIMIT`；保留成果與續跑方式見 `.model-ladder/HANDOFF.md`，等額度重設後再繼續。
+
 | 條件 | 行為 |
 |---|---|
 | Claude 用量門檻 | 在 run 前及失敗嘗試後檢查。 |
@@ -199,7 +244,7 @@ Hook 信任適用於目前的定義與內容：更新後請在 Codex CLI 開啟 
 可停止已註冊 runner，不代表能取消任意 Claude 宿主 session 或 hosted agent。
 Claude 用量來自 Band 或 `scripts/usage-statusline.mjs`，只有 Pro/Max 方案回報用量。
 
-`USAGE_LIMIT` 會保留可用草稿並寫入 `.model-ladder/HANDOFF.md`。
+`USAGE_LIMIT` 會保留可用草稿並寫入 `.model-ladder/HANDOFF.md`（最後寫入者），並另存各 run 的 `.model-ladder/runs/<runId>.HANDOFF.md`。
 主 session 在原樣保留的驗證附錄前補上目標、決定、已完成工作、下一步與續跑方式，附錄仍為權威紀錄。
 session 無法呼叫模型時保留模板。
 強制終止的 run 可能沒有 checkpoint 或 `result.json`，此時檢查草稿並在額度重設後重啟原始任務，不可杜撰 `resumeRun`。
@@ -216,17 +261,119 @@ Claude Code 即時讀取 run 鎖中的 `phaseExpected`（每個 workflow 邊界�
 
 Claude 由主控端在每次 Workflow 呼叫前後執行 Node 記錄命令。Workflow 不讀時鐘、不匯入模組；結構化 journal 每次接續一個代理，重播先前結果不再呼叫模型。階段計時包含該次呼叫內的主控端成本；preflight 到 finish 的總時間包含等待。錯誤時未結束的邊界保留為截尾觀測。
 
+## 功能
+
+- **隔離的 Git worktree**：每次嘗試各自在獨立 worktree 中執行。
+- **適時升級**：驗證失敗時，可能改用更強的模型或提高 effort。
+- **小任務 DIRECT**：router 判定為小任務時（瑣碎且範圍明確的修改，或任何唯讀的提問、說明、分析），由主 session 處理，有修改時完成後仍須獨立驗證。與 context 大小無關，可用 `direct_threshold` 關閉 DIRECT。
+- **預估資訊**：每個 agent 列的時間欄顯示該 agent 自己的「經過/預期時長」（例如 `5s/12m`；執行中的 agent 超過預期後，預期時長會分段重新估計，已結束的列保留原值，僅 worker、test-writer、verifier 列；來自先前成功的 run，尚無歷史時採用 router 給的單次分鐘數；router、diagnose、final diagnosis 列只顯示經過時間）；開跑時若預估某個用量時間窗不足或有風險，會在 worker 開始前詢問一次。
+- **並行執行**：檔案範圍不重疊的 run 可同時進行，並有重疊檢查與序列化套用結果。
+- **自動路由與分層設定**：session hook 預設啟用 ladder，並支援個人設定與專案覆寫。
+- **受保護的測試**：除非任務明確要求修改測試，worker 不得修改測試。
+- **使用量保護**：偵測到用量停止條件時結束目前 run 並強制停止同機其他已註冊 run，Codex 執行期間每 2 秒檢查一次。
+- **交接文件**：用量停止或執行 `/model-ladder:handoff` 時建立 `.model-ladder/HANDOFF.md`，由主 session 根據對話改寫，並保留程式產生的驗證附錄。
+- **Band / panel / HUD**：透過 Claude band 或 Codex 終端顯示查看角色、用量與保護控制；CLI HUD 能識別 session 時也會顯示 context。
+- **自訂角色指示**：`worker_skills` 與 `verifier_skills` 可指定角色權限內可用的 skills 與工具，Claude Router 則僅能使用 Read、Grep、Glob。
+- **Codex 逾時續跑**：含 checkpoint 的 `TIMEOUT` 結果可用 `resumeRun` 延續草稿，通過驗證後才套用。
+- **選用的 Codex commit**：`commit: true` 會提交已驗證的檔案，保留無關的 staged 變更，並跳過含既有或並行修改的檔案。
+- **Execution v2（選用）**：task contract 依風險選擇 profile，不使用 model router；兩個原生後端使用同一套確定性 gate 與證據（[遷移指南](docs/migration/execution-v2.md)）。
+
+## 安裝補充
+
+請在至少有一個 commit 的 Git repo 中使用，並先確認[需求](#需求與相容性)。請先安裝並登入 Claude Code。
+
+安裝後重開 Claude Code 即生效，之後的頂層任務會自動走 `/model-ladder:run`。第一次執行時若詢問是否允許 Workflow，選「不再詢問」即可。更新：`claude plugin update model-ladder@model-ladder`（marketplace 開啟自動更新時會自動進行）。報告會提示新版本，見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)。
+
+Codex 自動執行（autorun）需要 `codex features list` 顯示 `hooks` 為開啟。若為關閉，請在 `~/.codex/config.toml` 加入 `[features]` 與 `hooks = true`，否則 Codex SessionStart hook 永遠不會執行。
+
+更新 Codex 外掛的步驟：
+
+1. 執行 `codex plugin marketplace upgrade model-ladder`，再執行 `codex plugin add model-ladder@model-ladder` 取得並安裝新版。
+2. 在 Codex CLI 開啟 `/hooks`。若 model-ladder 的 SessionStart hook 顯示已修改，請檢閱並重新信任。信任前 Codex 會略過它，無法自動設定 panel／HUD 或載入 autorun 指示。
+3. 開啟新的 Codex session。hook 會自動把 PowerShell profile 中的 `codex` 函式改指向新版本。
+4. Windows 上新版本第一次啟動時，node-pty 會在背景安裝，因此該次可能是一般 `codex`。之後開新的 PowerShell 視窗輸入 `codex`，即可進入新版 HUD。
+
+## 需求與相容性
+
+| 項目 | 最低需求 | 測試狀態 |
+|---|---|---|
+| Claude Code | 需支援外掛與 Workflow 工具；band 需要 2.1.290+ | 以 Claude Code 開發；CI 沒有版本矩陣。Pro 方案請先到 `/config` 啟用 Workflow |
+| Codex CLI | 0.160.1+，需要已登入的原生 `codex`；先在 `/hooks` 信任外掛 hooks | 以 Codex 開發；CI 沒有版本矩陣 |
+| Node.js | 20（外掛不會自動安裝） | CI 單元測試涵蓋 20 與 22 |
+| Git | 近期版本即可；repo 至少要有一個 commit | CI 有使用，未固定最低版本 |
+| Windows | Codex HUD 需要原生 `codex.exe` | CI 單元測試涵蓋 `windows-latest`；主要開發平台 |
+| Linux | | CI 單元測試涵蓋 `ubuntu-latest` |
+| macOS | | 未測（不在 CI 矩陣內） |
+
+出處：[`.github/workflows/test.yml`](.github/workflows/test.yml)（ubuntu-latest 與 windows-latest，Node 20 與 22）及上述版本說明。CI 只跑單元測試，不會執行 Claude Code 或 Codex。
+
+## 它會動到什麼與資料外送
+
+| 項目 | 說明 | 如何關閉 |
+|---|---|---|
+| 每日更新檢查 | 每天最多一次，向 `raw.githubusercontent.com` 取得 `.claude-plugin/plugin.json`（逾時 3 秒，失敗時靜默），結果快取在系統暫存目錄的 `model-ladder-update-check.json`，有新版時報告會提示。不會傳送 repo 資料。 | 設定 `MODEL_LADDER_NO_UPDATE_CHECK=1` |
+| `.git/info/exclude` | 把 `.model-ladder/` 與 `.claude/worktrees/` 附加進去（支援 worktree），不必改 `.gitignore`，也不會改動你已追蹤的檔案。 | 刪除這兩行 |
+| PowerShell profile（僅 Windows、Codex） | Codex SessionStart hook 會在 PowerShell 7 與 Windows PowerShell 的 profile 加入一段有標記的 `function codex`，讓 `codex` 在 HUD 中執行；HUD 無法執行時會退回原生 `codex.exe`。 | 在 `~/.codex/model-ladder.json` 設定 `"hudTakeover": false`（`band: false` 同樣有效），下次 Codex session 啟動時會移除該區塊；手動移除請見[解除安裝](#解除安裝) |
+| `.model-ladder/` | 內含 `runs/`（run 鎖）、`history.jsonl`、`live.json`、`usage.json`、`context.json` 與 `HANDOFF.md`。Codex 每次 run 的 worktree、log 與 checkpoint 放在系統暫存目錄的 `model-ladder/<repo hash>/`。 | 刪除這些目錄（見[解除安裝](#解除安裝)） |
+| 模型呼叫與額度 | 一項任務可能有 router、worker、verifier，失敗後還會升級重跑 worker 與 verifier，因此比直接做更耗 Claude 或 Codex 額度。任務內容與程式碼會像一般使用 Claude Code 或 Codex 一樣送到模型。 | 單次任務說「no ladder」，或關閉 `autoRun` |
+| 使用量保護 | 達到設定門檻（預設 90%）時，用量停止會結束目前 run，並強制停止同機其他已註冊的 model-ladder run。 | 在 band 或 panel 關閉 `usageGuard`；硬性額度上限仍會停止 run |
+| `autoRun` | 預設開啟：頂層任務自動走 ladder。 | 將 `autoRun` 設為 `false`（Claude：`/plugin configure model-ladder`；Codex：`~/.codex/model-ladder.json`），或設定 `MODEL_LADDER_AUTORUN=0` |
+
+## 解除安裝
+
+1. 先在外掛仍安裝時清理狀態：在每個用過的 repo 內執行 `/model-ladder:uninstall`（Codex：`uninstall` skill）。它會先列出 dry-run 清單、請你確認，再移除該 repo 的 `.model-ladder/`、`.claude/worktrees/`、exclude 行、worktree 與暫存資料夾，以及 PowerShell profile 區塊與 `model-ladder-update-check.json`。也可在外掛資料夾執行 `node scripts/uninstall.mjs [--dry-run] [--force]`。
+2. 移除外掛：
+
+   ```sh
+   claude plugin uninstall model-ladder@model-ladder
+   codex plugin remove model-ladder@model-ladder
+   ```
+
+   也可另外執行 `claude plugin marketplace remove model-ladder` 與 `codex plugin marketplace remove model-ladder`。Windows 上在外掛移除前，Codex SessionStart hook 會重新加入 profile 區塊。
+
+skill 無法使用時的手動備案：
+
+- 移除 PowerShell profile 區塊（Windows、Codex）：先設定 `"hudTakeover": false` 並開啟一次 Codex session，讓 hook 自動移除；或手動編輯 `Documents\PowerShell\profile.ps1` 與 `Documents\WindowsPowerShell\profile.ps1`，刪除從 `# >>> model-ladder codex HUD >>>` 到 `# <<< model-ladder codex HUD <<<` 的整段，其餘內容不要動。
+- 在每個用過的 repo 中刪除 `.model-ladder/` 與 `.claude/worktrees/`，也可一併刪除 `.git/info/exclude` 中對應的兩行。
+- 清理殘留的 Git worktree：`git worktree list`，對 model-ladder 的 attempt 執行 `git worktree remove --force <路徑>`，最後執行 `git worktree prune`。
+- 刪除系統暫存目錄下的 `model-ladder/<repo hash>/`（以及 `model-ladder-update-check.json`）。
+
+## Beta 狀態與已知限制
+
+model-ladder 目前為 **Beta**：行為、設定與檔案結構可能隨版本調整（見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)）。已知限制：
+
+- Windows 上停止 run 時以 `taskkill` 終止整個程序樹；若 Windows 拒絕，run 會回報失敗並保留登記，不會宣稱已停止（[使用量保護細節](#使用量保護細節)）。被強制終止的 run 可能沒有 checkpoint 或 `result.json`，需重新執行原任務。
+- 獨立的 Codex 終端 panel 不顯示 context 用量（[Band 顯示與控制](#band-顯示與控制)）。
+- Pro 方案須先在 `/config` 啟用 Workflow 再安裝外掛，否則無法使用自動化。
+- Windows 需要原生 `codex.exe`（透過 PATH 或 `CODEX_BINARY`），不支援 `.cmd` 或 `.bat` shim（[Codex runner 與 HUD](#codex-runner-與-hud)、`scripts/codex-hud.mjs`）。
+- Codex HUD 必須由它啟動 Codex，無法接入執行中的 session，且自動設定 PowerShell 僅限 Windows（[Codex runner 與 HUD](#codex-runner-與-hud)）。
+- Claude 用量讀數僅 Pro/Max 方案提供；用量未知時保護不會阻擋執行（[使用量保護細節](#使用量保護細節)）。
+- macOS 未測（見[需求與相容性](#需求與相容性)）。
+- Codex 的 worker 與 verifier 沒有網路，它們的 worktree 也沒有 `.venv` 或 `node_modules`。uv 專案會以唯讀方式借用主 checkout 的 `.venv`，所以需要先在主 checkout 跑 `uv sync`；需要 `node_modules` 的 Node 專案檢查會回報為未執行（[Codex sandbox：uv 與 Node 專案](#codex-sandboxuv-與-node-專案)）。
+
+## 使用步驟
+
+1. **平常使用**：在 Git repo 中直接描述任務，預設會自動使用 ladder。
+2. **手動啟動**：Claude Code 使用 `/model-ladder:run <任務>`，Codex 則請 agent 使用 `model-ladder` skill。
+3. **描述任務**：說明目標與預期結果，需要修改測試或只審查不修改時明確提出。
+4. **略過或強制使用**：說「no ladder」可略過，Claude 指令加上 `--ladder` 可強制使用。
+5. **回應詢問**：確認是否處理未提交變更、補充不清楚的任務，並在用量預估警告時間窗可能不足時選擇繼續或停止。
+6. **查看結果**：通過驗證才算完成，報告會列出修改檔案、驗證結果與剩餘限制，預設不 commit 或 push。
+7. **交接與續跑**：需要時可要求建立交接文件，遇到用量停止則等額度重設，再依 `.model-ladder/HANDOFF.md` 續跑。
+8. **專案驗證 skill**：model-ladder 內建源自 pstack 的 [`create-verification-skill`](skills/create-verification-skill/SKILL.md) 與 [`maintain-verification-skill`](skills/maintain-verification-skill/SKILL.md)，Codex plugin 也附有[對應版本](codex-skills/)。它們會為目標專案建立或維護專屬驗證 driver。本 repository 已有自己的 [`.agents/skills/verify/SKILL.md`](.agents/skills/verify/SKILL.md)，用途是驗證 model-ladder，不是替任意專案建立通用 driver。來源與授權請見[第三方 notice](NOTICE.zh-TW.md)。
+9. **Local Fast Path**：當 session 能指出任務只改的那一個檔案，且專案的 verify 指令能完整檢查結果時，model-ladder 不啟動 router、worker 與 verifier agent，改由 session 直接修改，再在該 snapshot 上執行 verify 指令。其他任務照舊走 ladder。執行 `node scripts/telemetry.mjs` 可彙總過去執行的實測 token 與品質。請見 [native-first workflow](docs/architecture/native-first-workflow.md)。
+
 ## 疑難排解
 
 | 症狀 | 原因 | 解法 |
 |---|---|---|
-| Pro 方案的 Claude Code 沒有 Workflow 工具，或無法使用自動化。 | ladder 以 Workflow 執行，Pro 方案須先啟用（[README](README.zh-TW.md#需求與相容性)）。 | 安裝外掛前先在 `/config` 啟用 Workflow。第一次執行若詢問是否允許 Workflow，選「不再詢問」。 |
+| Pro 方案的 Claude Code 沒有 Workflow 工具，或無法使用自動化。 | ladder 以 Workflow 執行，Pro 方案須先啟用（[需求與相容性](#需求與相容性)）。 | 安裝外掛前先在 `/config` 啟用 Workflow。第一次執行若詢問是否允許 Workflow，選「不再詢問」。 |
 | preflight 回傳 `ERROR`：「model-ladder needs a git repository with at least one commit」。 | 資料夾不是 Git repo，或尚無任何 commit 導致 `HEAD` 無法解析（`scripts/preflight.mjs`）。 | 執行 `git init` 並建立第一個 commit，或改在既有 repo 中使用；否則請直接做該任務。 |
 | Windows 上 worker 錯誤出現 `Refusing to use <path> as an isolation worktree`。 | Claude Code 可能拒絕所有隔離 worktree，例如把 `c:\` 與 `C:/` 視為不同路徑（CHANGELOG 1.2.5）。 | 更新到 1.2.6 或以上。worktree 被拒後不再結束該次呼叫：worker 會在同一次呼叫內於 `.claude/worktrees/` 以 `git worktree add --detach` 建立自己的 worktree，只在其中工作。錯誤訊息保留 600 字元，可看到兩個路徑。仍失敗時檢查 `git worktree list` 與 `git worktree prune`。 |
 | Codex 的 autorun、panel 或 HUD 沒出現，或 `/hooks` 顯示 hook 已修改。 | Codex 會略過未信任或已修改的 SessionStart hook；信任綁定目前的定義與內容，因此每次更新外掛後都需重新信任。手動執行腳本不會建立信任。 | 在 Codex CLI 開啟 `/hooks`，檢閱並重新信任 model-ladder 的 SessionStart hook，再開新 session（[Band 與 panel 詳細說明](#band-與-panel-詳細說明)）。 |
 | Windows 上 HUD 無法啟動，出現「Codex HUD requires a native executable」。 | 以 npm 安裝的 `codex` 是 `.cmd` 或 `.bat` shim，HUD 不支援（`scripts/codex-hud.mjs`）。 | 讓原生 `codex.exe` 出現在 PATH，或以 `CODEX_BINARY` 指定它（[Codex runner 與 HUD](#codex-runner-與-hud)）。 |
 | HUD 顯示「node-pty could not be loaded」並改啟動一般 `codex`。 | `node-pty` 第一次會在背景安裝（`npm ci --omit=dev`），可能還在安裝或安裝失敗。沒有它就沒有 HUD，但 `codex` 仍可執行。 | 等待 SessionStart 顯示就緒，或在外掛目錄執行 `npm ci`。安裝記錄是 `<system temp>/model-ladder/<repo hash>/` 下的 `npm-ci.log`。之後開新的 PowerShell 視窗。 |
-| 舊版 Node.js 上腳本執行失敗。 | 外掛需要 Node.js 20，且不會代為安裝；CI 測試 20 與 22（[README](README.zh-TW.md#需求與相容性)）。 | 安裝 Node.js 20 或以上。 |
+| 舊版 Node.js 上腳本執行失敗。 | 外掛需要 Node.js 20，且不會代為安裝；CI 測試 20 與 22（[需求與相容性](#需求與相容性)）。 | 安裝 Node.js 20 或以上。 |
 | Claude Code 的 band 沒有出現。 | band 需要 Claude Code 2.1.290 或以上。 | 更新 Claude Code。 |
 | 報告為 `DIRTY`。 | 其他 run 或你自己在 checkout 中留下未提交變更。 | 確認是否以這些變更為基礎執行（[並行執行](#並行執行)）。 |
 | 報告為 `STALE_RUN`。 | 鎖已失效、無法讀取或為舊格式，或屬於已當機的 Claude session。 | 檢查列出的鎖與程序，再授權 `--clear-stale` 或 `clearStale: true`；當機的 Claude session 則用 `--clear-stale=<runId>`。切勿清除仍有存活程序的鎖（[並行執行](#並行執行)）。 |

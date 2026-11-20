@@ -1,6 +1,8 @@
 # Advanced usage
 
-[README](README.md#how-to-use) · [繁體中文](USAGE.zh-TW.md) · [Design](DESIGN.md)
+[README](README.md) · [繁體中文](USAGE.zh-TW.md) · [Design](DESIGN.md)
+
+Contents: [Features](#features) · [Install notes](#install-notes) · [Requirements](#requirements-and-compatibility) · [Privacy](#what-it-changes-and-what-leaves-your-machine) · [Uninstall](#uninstall) · [Beta limitations](#beta-status-and-known-limitations) · [Step by step](#using-it-step-by-step) · [Settings](#advanced-settings) · [Band](#band-display-and-controls) · [Usage guard](#usage-protection-details)
 
 ## Reports
 
@@ -30,6 +32,12 @@ Look for `evidence.version: 1` in the runner result or its history entry. The ru
 Read the attempt's `pass` and the run's `status` and `outcome` for the delivery decision. An individual command or review can pass before the snapshot integrity check rejects the attempt. Older records and runs stopped before capturing the baseline may omit `evidence`.
 
 The evidence fields omit command text, process output, and model commentary. Existing fields and raw role logs can contain sensitive data. Review them before sharing.
+
+### Claude verification evidence
+
+Before Claude finish applies a candidate, it checks that the changed files stay inside the claimed scope, then runs the plan's `verify` command in the candidate worktree. A nonzero exit, a 10-minute timeout, or a command that changes the candidate tree blocks the change, and the run is `FAILED`. The history entry's `command` field records the command, exit code, duration, `HOST_UNSANDBOXED` and the last 4 KiB of stdout and stderr; it is `null` when the plan has only acceptance criteria. The command runs in the host shell, so a check that needs dependencies missing from the worktree also blocks the change.
+
+Each failed attempt records `failure`: `ENVIRONMENT_FAILURE`, `CONTEXT_LIMIT`, `PERMISSION_FAILURE`, `SANDBOX_DENIAL` or `TOOL_FAILURE`. A worker or verifier that dies on its context limit stops the run without a diagnosis; other kinds are recorded and still diagnosed.
 
 ### Require a native verification sandbox
 
@@ -84,7 +92,7 @@ Shared `live.json`, the panel, and `HANDOFF.md` show the last writer, while auto
 | Location | Contents |
 |---|---|
 | `.model-ladder/runs/` | Run locks and Claude transient state, setup patches, and conflict patches. |
-| `.model-ladder/` | Shared history, live state, usage, context, and `HANDOFF.md`. |
+| `.model-ladder/` | Shared history, live state, usage, context, and `HANDOFF.md` (latest writer; each run also keeps `runs/<runId>.HANDOFF.md`). |
 | `<system temp>/model-ladder/<repo hash>/codex-<uuid>/` | Codex worktrees, logs, outputs, snapshots, checkpoints, and `result.json`. |
 
 Use the paths returned by the runner rather than guessing them.
@@ -132,6 +140,9 @@ Personal files are `~/.claude/model-ladder.json` and `~/.codex/model-ladder.json
 
 Claude model aliases follow available versions; configure Codex model IDs and efforts for your account.
 Claude's plugin picker offers DIRECT values `on` and `off`.
+Defaults work without a settings file. Claude Code: open `/plugin configure model-ladder`, where `worker_skills` is **Worker skill instructions** and `verifier_skills` is **Verifier skill instructions**; for Claude settings outside the plugin screen use `~/.claude/model-ladder.json`. Codex: edit `~/.codex/model-ladder.json`.
+Project settings in `.claude/model-ladder.json` or `.codex/model-ladder.json` override personal settings; keep usage protection in your personal file unless the project needs an override.
+Each worker reports every named capability in `worker_skills`; one that applies and is available but was not used fails the attempt.
 Without explicit `verify`, Codex prefers a project verify skill, then discovers existing npm, pytest, Cargo, Go, Maven, or Make checks.
 
 ### Codex sandbox: uv and Node projects
@@ -162,9 +173,41 @@ The first colon separates the project name; matching bodies retain later colons,
 Unavailable capabilities are reported before execution and in the final report, for example: `ponytail` is not available in this project.
 Role instructions may name skills, plugins, slash commands, or MCP servers, but cannot expand permissions, permit verifier edits, or recurse into the ladder.
 
-## Band and panel details
+```json
+{
+  "worker_skills": "model-ladder: use <skills> to simplify code",
+  "verifier_skills": "model-ladder: use <skills> to review without edits"
+}
+```
 
-Basic fields and controls are shown in the [README](README.md#band-claude-code).
+## Band display and controls
+
+The band appears above the Claude Code prompt and requires Claude Code 2.1.290+.
+
+```text
+▴ 🟢 model-ladder ── 2h/5h 15% · 3d/7d 44% · ctx 287k/1M (28.7%)
+▸ worker use ponytail when coding
+model/effort        act./est.  task
+haiku-5.5/low       5s         Summarize the README install steps
+[usage guard: on]  threshold [90] %  [handoff now]
+```
+
+| Display or control | Meaning |
+|---|---|
+| Usage | Each window shows time to reset, window length, and usage percentage. |
+| Context | `ctx 287k/1M (28.7%)` shows tokens used, window size, and percentage; unknown tokens show only the window. |
+| Status | 🟢 worker or router, 🔵 verifier, 🔴 retrying worker, and `✓` for a finished row. |
+| Task rows | Show the model, effort, the agent's elapsed time (worker, test-writer and verifier rows add "/" and their own expected duration, from history or the router's minutes; other rows show elapsed only), and task. A `background` row appears for each in-flight background task the main session started (see below). |
+| `▴` / `▾` | Collapse or expand the band. |
+| Instruction arrow | Show only applicable instructions without the `skill instructions:` prefix; expand the single-line preview with `▸` and collapse with `▾`. |
+| `usage guard` | Toggle usage protection. When a usage window reaches the threshold, the band hands off once on its own, as `handoff now` does; it hands off again only after that window drops below the threshold or resets. |
+| `threshold` | Set a threshold from 1 to 100%, saved on Enter or after 5 seconds without typing. |
+| `handoff now` | Write the handoff template and run `/model-ladder:handoff` for the main session to rewrite it without cancelling the run. |
+
+Guard controls save to your personal settings, and project overrides still take priority.
+The separate Codex terminal panel does not show context usage; enter `g` to toggle the guard, `t 90` to set the threshold, `h` to write a handoff template, or `q` to close the panel, followed by Enter.
+
+## Band and panel details
 
 | Detail | Behavior |
 |---|---|
@@ -186,6 +229,8 @@ Explicitly invoking the ladder skill also initializes the panel; no editor UI ex
 
 ## Usage protection details
 
+The guard is on by default, with a 90% threshold for the 5-hour or weekly limit. Change it with the band controls or the Codex panel commands `g` and `t 90`. A usage stop returns `USAGE_LIMIT`; check `.model-ladder/HANDOFF.md` for retained work and resume instructions after the quota resets.
+
 | Condition | Behavior |
 |---|---|
 | Claude usage threshold | Checked before a run and after failed attempts. |
@@ -200,7 +245,7 @@ Do not bypass the sandbox, clear a live lock, or replace process-tree terminatio
 Registered runner termination does not imply control over arbitrary Claude host sessions or hosted agents.
 Claude usage comes from the Band or `scripts/usage-statusline.mjs`; only Pro/Max plans report it.
 
-`USAGE_LIMIT` retains available draft work and writes `.model-ladder/HANDOFF.md`.
+`USAGE_LIMIT` retains available draft work and writes `.model-ladder/HANDOFF.md` (latest writer) plus a per-run copy `.model-ladder/runs/<runId>.HANDOFF.md`.
 The main session adds the goal, decisions, completed work, next steps, and resume instructions above the unchanged generated verification appendix, which remains authoritative.
 If the session cannot call a model, keep the template as the fallback.
 A force-killed run may lack a checkpoint or `result.json`; inspect its draft and restart the original task after quota reset instead of inventing `resumeRun`.
@@ -241,17 +286,119 @@ structured journal continues one agent at a time without repeating model calls.
 These timings include host overhead and gaps inside each call; preflight-to-finish
 elapsed time includes user/host waits. Open boundaries are censored on errors.
 
+## Features
+
+- **Isolated Git worktrees**: each attempt runs in its own worktree.
+- **Escalation when appropriate**: verification failure may lead to a stronger model or higher effort.
+- **DIRECT for small tasks**: when the router judges a task small (a trivial bounded change, or any read-only question, explanation or analysis), the session handles it and still submits changes for independent verification. Context size plays no part; `direct_threshold` can switch DIRECT off.
+- **Forecasts**: each agent row's time column shows that agent's own elapsed time over its own expected duration (for example `5s/12m`; once a running agent overruns it, the expected duration is recalibrated in steps, and a finished row keeps its original value) on worker, test-writer and verifier rows, from earlier successful runs or, before any history, the router's per-attempt minutes; router, diagnose and final-diagnosis rows show elapsed only, and when the startup forecast says a subscription window is insufficient or at risk, the ladder asks once before any worker starts.
+- **Concurrent runs**: runs with separate file scopes can proceed together, with overlap checks and serialized application of results.
+- **Automatic routing and layered settings**: session hooks enable the ladder by default, with personal settings and project overrides.
+- **Protected tests**: workers cannot modify tests unless the task explicitly asks for test changes.
+- **Usage protection**: a detected usage stop ends the current run and force-stops other registered runs on the machine, with Codex checking every 2 seconds during execution.
+- **Handoff document**: usage stops or `/model-ladder:handoff` create `.model-ladder/HANDOFF.md`, which the main session rewrites from the conversation while preserving the program-generated verification appendix.
+- **The band / panel / HUD**: view active roles, usage, and guard controls in the Claude band or Codex terminal displays; the CLI HUD also shows context when its session can be identified.
+- **Custom role instructions**: `worker_skills` and `verifier_skills` select available skills and tools within each role's permissions, while the Claude Router has only Read, Grep, and Glob.
+- **Codex timeout recovery**: `TIMEOUT` results with a checkpoint support `resumeRun` to continue the draft and verify it before application.
+- **Optional Codex commits**: `commit: true` commits verified files while preserving unrelated staged changes and skipping files with pre-existing or concurrent edits.
+- **Execution v2 (opt-in)**: a task contract selects a risk-based profile without a model router; both native backends use the same deterministic gate and evidence ([migration guide](docs/migration/execution-v2.md)).
+
+## Install notes
+
+Use model-ladder in a Git repository with at least one commit; check the [requirements](#requirements-and-compatibility) first. Install and sign in to Claude Code first.
+
+Restart Claude Code after installing; top-level tasks then go through `/model-ladder:run` automatically. If the first run asks whether to allow Workflow, choose "don't ask again". Update with `claude plugin update model-ladder@model-ladder` (automatic when the marketplace has auto-update on); reports announce new versions ([CHANGELOG.md](CHANGELOG.md)).
+
+For Codex autorun, `codex features list` must show `hooks` on. If it is off, add `[features]` with `hooks = true` to `~/.codex/config.toml`; otherwise the Codex SessionStart hook never runs.
+
+To update the Codex plugin:
+
+1. Run `codex plugin marketplace upgrade model-ladder`, then `codex plugin add model-ladder@model-ladder` to fetch and install the new version.
+2. Open `/hooks` in Codex CLI. If the model-ladder SessionStart hook is marked modified, review and re-trust it. Until trusted, Codex skips it, and automatic panel/HUD setup and autorun instructions are unavailable.
+3. Start a new Codex session. The hook points the `codex` function in your PowerShell profile at the new version automatically.
+4. On Windows, the first launch of the new version installs node-pty in the background, so that launch may start plain `codex`. Open a new PowerShell window and run `codex` to get the new HUD.
+
+## Requirements and compatibility
+
+| Item | Minimum | Tested status |
+|---|---|---|
+| Claude Code | Any version with plugins and the Workflow tool; the band needs 2.1.290+ | Developed on Claude Code; no version matrix in CI. On Pro, enable Workflow in `/config` first |
+| Codex CLI | 0.160.1+, authenticated native `codex`; trust the plugin hooks in `/hooks` | Developed on Codex; no version matrix in CI |
+| Node.js | 20 (the plugin does not install it) | CI unit tests on 20 and 22 |
+| Git | Any recent Git; use a repository with at least one commit | Used by CI, no minimum version pinned |
+| Windows | Codex HUD needs a native `codex.exe` | CI unit tests on `windows-latest`; the main development platform |
+| Linux | | CI unit tests on `ubuntu-latest` |
+| macOS | | Untested (not in the CI matrix) |
+
+Source: [`.github/workflows/test.yml`](.github/workflows/test.yml) (ubuntu-latest and windows-latest, Node 20 and 22) and the version notes above. CI runs unit tests only; it does not run Claude Code or Codex.
+
+## What it changes and what leaves your machine
+
+| What | Details | How to turn it off |
+|---|---|---|
+| Daily update check | At most once a day, fetches `.claude-plugin/plugin.json` from `raw.githubusercontent.com` (3 s timeout, silent on failure), caches the result in `model-ladder-update-check.json` in the system temp directory, and the report mentions a newer version. No repository data is sent. | Set `MODEL_LADDER_NO_UPDATE_CHECK=1` |
+| `.git/info/exclude` | Appends `.model-ladder/` and `.claude/worktrees/` there (worktree-safe), so you do not edit `.gitignore`. Your tracked files are not changed. | Delete those two lines |
+| PowerShell profile (Windows, Codex only) | The Codex SessionStart hook adds one marked `function codex` block to your PowerShell 7 and Windows PowerShell profiles. It runs `codex` inside the HUD and falls back to native `codex.exe` when the HUD cannot run. | Set `"hudTakeover": false` in `~/.codex/model-ladder.json` (`band: false` also does); the next Codex session start removes the block. See [Uninstall](#uninstall) to remove it by hand |
+| `.model-ladder/` | Holds `runs/` (run locks), `history.jsonl`, `live.json`, `usage.json`, `context.json` and `HANDOFF.md`. Per-run Codex worktrees, logs and checkpoints are in the system temp directory under `model-ladder/<repo hash>/`. | Delete the directories (see [Uninstall](#uninstall)) |
+| Model calls and quota | One task can run a router, a worker, a verifier and, after a failure, further escalated worker and verifier attempts. This uses more of your Claude or Codex quota than doing the task directly. Your task text and code go to the models as in normal Claude Code or Codex use. | Say "no ladder" for a task, or turn off `autoRun` |
+| Usage guard | At the configured threshold (default 90%) a usage stop ends the current run and force-stops other registered model-ladder runs on the same machine. | Turn off `usageGuard` in the band or panel; hard limits still stop runs |
+| `autoRun` | On by default: top-level tasks go through the ladder automatically. | Set `autoRun` to `false` (Claude: `/plugin configure model-ladder`; Codex: `~/.codex/model-ladder.json`), or set `MODEL_LADDER_AUTORUN=0` |
+
+## Uninstall
+
+1. Clean up state first, while the plugin is still installed: run `/model-ladder:uninstall` (Codex: the `uninstall` skill) inside each repository you used it in. It shows a dry-run list, asks you to confirm, then removes the repo's `.model-ladder/`, `.claude/worktrees/`, exclude lines, worktrees and temp folder, plus the PowerShell profile block and `model-ladder-update-check.json`. `node scripts/uninstall.mjs [--dry-run] [--force]` does the same from the plugin folder.
+2. Remove the plugins:
+
+   ```sh
+   claude plugin uninstall model-ladder@model-ladder
+   codex plugin remove model-ladder@model-ladder
+   ```
+
+   Optionally also `claude plugin marketplace remove model-ladder` and `codex plugin marketplace remove model-ladder`. On Windows the Codex SessionStart hook re-adds the profile block until the plugin is removed.
+
+Manual fallback, if the skill is unavailable:
+
+- Remove the PowerShell profile block (Windows, Codex). First set `"hudTakeover": false` and start a Codex session so the hook removes it, or edit by hand: open `Documents\PowerShell\profile.ps1` and `Documents\WindowsPowerShell\profile.ps1` and delete everything from the line `# >>> model-ladder codex HUD >>>` through `# <<< model-ladder codex HUD <<<`. Leave the rest of the file alone.
+- In each repository you used it in, delete `.model-ladder/` and `.claude/worktrees/`, and optionally the two matching lines in `.git/info/exclude`.
+- Clean up leftover Git worktrees: `git worktree list`, then `git worktree remove --force <path>` for any model-ladder attempt, then `git worktree prune`.
+- Delete `model-ladder/<repo hash>/` (and `model-ladder-update-check.json`) in the system temp directory.
+
+## Beta status and known limitations
+
+model-ladder is **Beta**: behavior, settings and file layouts may change between versions (see [CHANGELOG.md](CHANGELOG.md)). Known limitations:
+
+- On Windows, stopping a run kills the whole process tree with `taskkill`. If Windows denies it, the run reports the failure and keeps its registration rather than claiming it stopped ([Usage protection details](#usage-protection-details)). A force-killed run may lack a checkpoint or `result.json`; restart the original task.
+- The separate Codex terminal panel does not show context usage ([Band display and controls](#band-display-and-controls)).
+- On Pro, Workflow must be enabled in `/config` before you install the plugin, or automation is unavailable.
+- Windows requires a native `codex.exe` (PATH or `CODEX_BINARY`); a `.cmd` or `.bat` shim is not supported ([Codex runner and HUD](#codex-runner-and-hud), `scripts/codex-hud.mjs`).
+- The Codex HUD must launch Codex; it cannot attach to a running session, and the automatic PowerShell setup is Windows only ([Codex runner and HUD](#codex-runner-and-hud)).
+- Claude usage readings exist only on Pro/Max plans; with unknown usage the guard does not block ([Usage protection details](#usage-protection-details)).
+- macOS is untested (see [Requirements and compatibility](#requirements-and-compatibility)).
+- Codex workers and verifiers have no network, and their worktrees have no `.venv` or `node_modules`. A uv project borrows the main checkout's `.venv` read-only, so run `uv sync` in the main checkout first; a Node project whose checks need `node_modules` reports them as not run ([Codex sandbox: uv and Node projects](#codex-sandbox-uv-and-node-projects)).
+
+## Using it step by step
+
+1. **Everyday use**: describe your task in a Git repository and the ladder runs automatically by default.
+2. **Start manually**: use `/model-ladder:run <task>` in Claude Code, or ask Codex to use the `model-ladder` skill.
+3. **Describe the task**: state the goal and expected result, and explicitly request test changes or a review without edits when needed.
+4. **Skip or force the ladder**: say "no ladder" to skip it, or add `--ladder` to the Claude command to force it.
+5. **Answer prompts**: confirm work on uncommitted changes, clarify unclear tasks, and choose to continue or stop when the usage forecast warns that a window may run out.
+6. **Read the result**: completion requires verification, and the report lists changed files, checks, and remaining limits, with no commit or push by default.
+7. **Hand off and resume**: request a handoff when needed, or wait for quota reset after a usage stop and follow `.model-ladder/HANDOFF.md` to resume.
+8. **Project verification skills**: model-ladder bundles the pstack-derived [`create-verification-skill`](skills/create-verification-skill/SKILL.md) and [`maintain-verification-skill`](skills/maintain-verification-skill/SKILL.md) for Claude Code, with [Codex versions](codex-skills/) in the Codex plugin. They generate or maintain a verification driver tailored to the target project. This repository already has its own driver at [`.agents/skills/verify/SKILL.md`](.agents/skills/verify/SKILL.md); it verifies model-ladder and is not a generic driver for other projects. See the [third-party notice](NOTICE.md) for the source and license.
+9. **Local Fast Path**: when the session can name the one file a task changes and the project's verify command fully checks it, model-ladder skips the router, worker and verifier agents. The session makes the edit, and the verify command runs on that exact snapshot. Any other task uses the ladder as before. Run `node scripts/telemetry.mjs` for an observed token and quality summary of past runs. See the [native-first workflow](docs/architecture/native-first-workflow.md).
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Claude Code on Pro does not offer or run the Workflow tool, so automation is unavailable. | The ladder runs as a Workflow, and Pro needs it enabled first ([README](README.md#requirements-and-compatibility)). | Enable Workflow in `/config` before installing the plugin. If the first run asks whether to allow Workflow, choose "don't ask again". |
+| Claude Code on Pro does not offer or run the Workflow tool, so automation is unavailable. | The ladder runs as a Workflow, and Pro needs it enabled first ([Requirements](#requirements-and-compatibility)). | Enable Workflow in `/config` before installing the plugin. If the first run asks whether to allow Workflow, choose "don't ask again". |
 | Preflight returns `ERROR`: "model-ladder needs a git repository with at least one commit". | The folder is not a Git repository, or `HEAD` does not resolve because there is no commit (`scripts/preflight.mjs`). | Run `git init` and make a first commit, or work in an existing repository. Otherwise do the task directly. |
 | On Windows, the worker error says `Refusing to use <path> as an isolation worktree`. | Claude Code can refuse every isolation worktree, for example by comparing `c:\` and `C:/` as different paths (CHANGELOG 1.2.5). | Update to 1.2.6 or later. A refused worktree no longer ends the call: the worker runs `git worktree add --detach` under `.claude/worktrees/` and works only there, within the same call. Errors keep 600 characters so both paths show. If it still fails, check `git worktree list` and `git worktree prune`. |
 | Codex autorun, the panel or the HUD is missing, or the hook is marked modified in `/hooks`. | Codex skips SessionStart hooks that are untrusted or modified, and trust applies to the current definition and content, so every plugin update needs it again. Running the script by hand does not establish trust. | Open `/hooks` in Codex CLI, review and re-trust the model-ladder SessionStart hook, then start a new session ([Band and panel details](#band-and-panel-details)). |
 | On Windows, the HUD refuses to start with "Codex HUD requires a native executable". | An npm-installed `codex` is a `.cmd` or `.bat` shim, which the HUD does not support (`scripts/codex-hud.mjs`). | Put the native `codex.exe` on PATH, or set `CODEX_BINARY` to it ([Codex runner and HUD](#codex-runner-and-hud)). |
 | The HUD prints "node-pty could not be loaded" and starts plain `codex`. | `node-pty` is installed in the background (`npm ci --omit=dev`) the first time and may still be installing or have failed. Without it there is no HUD, but `codex` still runs. | Wait for SessionStart to report it ready, or run `npm ci` in the plugin directory. The install log is `npm-ci.log` in `<system temp>/model-ladder/<repo hash>/`. Then open a new PowerShell window. |
-| Scripts fail on an old Node.js. | The plugin requires Node.js 20 and does not install it; CI tests 20 and 22 ([README](README.md#requirements-and-compatibility)). | Install Node.js 20 or later. |
+| Scripts fail on an old Node.js. | The plugin requires Node.js 20 and does not install it; CI tests 20 and 22 ([Requirements](#requirements-and-compatibility)). | Install Node.js 20 or later. |
 | The Claude Code band does not appear. | The band requires Claude Code 2.1.290 or later. | Update Claude Code. |
 | The report is `DIRTY`. | Another run, or you, left uncommitted changes in the checkout. | Confirm whether to build on those changes ([Concurrent runs](#concurrent-runs)). |
 | The report is `STALE_RUN`. | A lock is dead, unreadable or legacy, or belongs to a crashed Claude session. | Inspect the listed locks and processes, then authorize `--clear-stale` or `clearStale: true`, or use `--clear-stale=<runId>` for a crashed Claude session. Never clear a lock with a live process ([Concurrent runs](#concurrent-runs)). |

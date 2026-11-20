@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { TEST_PATTERNS } from '../hooks/guard.mjs'
-import { legalMoves, pickMove, isCell, usageRisk, dropUnachievableAcceptance } from './ladder-rules.mjs'
+import { legalMoves, pickMove, isCell, usageRisk, dropUnachievableAcceptance, repeatsFailure, failureKindOf } from './ladder-rules.mjs'
 import { agentExpected } from '../hooks/band/rows.mjs'
 import { agentExpectations, history, startForecast, routeForecast, updateForecast, finishForecast, withRouterMinutes } from './forecast.mjs'
 import { readCodexUsage } from './codex-usage.mjs'
@@ -469,6 +469,7 @@ Also return estimatedMinutes (most likely), optimisticMinutes and pessimisticMin
     const maxAttempts = policy?.profile === 'DIRECT' ? 1 : contract ? Math.min(config.maxAttempts, contract.limits.maxAttempts) : config.maxAttempts
     let seed = checkpoint?.tree ?? baseTree
     let previousFailure
+    let lastFailure
     for (let number = 1; number <= maxAttempts; number++) {
       const cwd = makeWorktree(root, run, number, baseCommit, seed)
       seed = baseTree
@@ -610,7 +611,7 @@ Reject the candidate if the available evidence cannot establish the acceptance c
           if (error.code !== 'TERMINATION_FAILED') retain(cwd, number)
           throw error
         }
-        verdict = { pass: false, reason: error.message.slice(-4000), output: '' }
+        verdict = { pass: false, reason: error.message.slice(-4000), output: '', agentError: true }
       }
       attempt.pass = verdict.pass
       if (contract) attempt.status = verdict.pass ? 'VERIFIED' : review.status === 'INCONCLUSIVE' ? 'INCONCLUSIVE' : 'FAILED'
@@ -669,8 +670,22 @@ Reject the candidate if the available evidence cannot establish the acceptance c
         continue
       }
       if (config.keepFailed) keep.push(cwd)
+      attempt.failure = failureKindOf(verdict.reason)
+      // Only an agent that died on its context stops here; a verdict that merely mentions a context window is a normal failure.
+      if (attempt.failure === 'CONTEXT_LIMIT' && verdict.agentError) {
+        result.status = 'STOPPED'
+        result.message = `Context limit reached, so no diagnosis was run: ${verdict.reason}`
+        return result
+      }
       const moves = legalMoves(cell, config.tiers)
       if (number === config.maxAttempts || !moves.length) break
+      const failure = { tree, reason: verdict.reason }
+      if (repeatsFailure(lastFailure, failure)) {
+        result.status = 'STOPPED'
+        result.message = `Repeated failure, so no diagnosis was run: ${verdict.reason}`
+        return result
+      }
+      lastFailure = failure
       let diagnosis
       try {
         diagnosis = await ask('diagnose', config.router, cwd, `Diagnose this failed model-ladder attempt. Read only.\nTASK\n${input.task}\nCELL\n${label(cell)}\nFAILURE\n${JSON.stringify(verdict)}\nWORKER\n${JSON.stringify(worker)}\nLEGAL NEXT CELLS\n${JSON.stringify(moves)}\nRaise effort or model when stronger reasoning can help. stop_environment for missing dependencies, required skills/plugins/MCP tools, invalid credentials, ${config.network ? 'unavailable services that are not plain network failures,' : 'unavailable services'} or permissions. stop_unclear for ambiguous goals. For raise actions choose a legal cell. For stop actions use null model and effort. Give the next worker a short hint. Each retry starts from the original snapshot. ${config.network ? 'Workers and verifiers run in a Codex sandbox with network access that may write only inside the worktree, which has no .venv or node_modules; a failure from those limits (uv cache access denied, missing packages) is stop_environment, and its hint says what the person can do: run uv sync in the main checkout first, or set verify in .codex/model-ladder.json to a command that needs no install. Plain network failures (timeouts, DNS, connection errors) are not stop_environment: give the next worker a hint to retry or to fetch with Python instead.' : 'Workers and verifiers run in a Codex sandbox with no network that may write only inside the worktree, which has no .venv or node_modules; a failure from those limits (uv cache access denied, failed downloads, missing packages) is stop_environment, and its hint says what the person can do: run uv sync in the main checkout first, or set verify in .codex/model-ladder.json to a command that needs no install or network.'} Worker and verifier run as different Windows sandbox accounts, so a PermissionError on gitignored files or directories created by an earlier role (pytest cache or tmp dirs, .uv-cache) is a sandbox identity issue, not a missing dependency: uv sync does not fix it.`)
@@ -736,9 +751,8 @@ Reject the candidate if the available evidence cannot establish the acceptance c
           if (result.errorCode === 'USAGE_LIMIT') {
             result.needsAiHandoff = true
             result.handoffSkill = 'handoff'
-            result.handoffPath = join(root, '.model-ladder', 'HANDOFF.md')
             publish()
-            writeHandoff(root, { live })
+            result.handoffPath = writeHandoff(root, { live })
           }
           writeFileSync(join(run, 'result.json'), JSON.stringify(result, null, 2))
           appendFileSync(join(root, '.model-ladder', 'history.jsonl'), `${JSON.stringify({ date: new Date().toISOString(), runtime: backend, task: input.task, ...result, ...(result.attempts && { attempts: result.attempts.map((a) => a.skills ? { ...a, skills: a.skills.map(({ name, applies, available, used, note }) => ({ name, applies, available, used, note })) } : a) }) })}\n`)

@@ -216,6 +216,19 @@ function dropUnachievableAcceptance(items) {
     return NEGATED.test(text) || !NEEDS_FINISH.some((re) => re.test(text))
   })
 }
+
+// Same candidate tree and same reason as the previous failure: another diagnosis would only repeat itself.
+function repeatsFailure(previous, current) {
+  return Boolean(previous && current) && ['tree', 'reason'].every((key) => current[key] && previous[key] === current[key])
+}
+// Message-only failure classification, shared by contract and legacy runs.
+function failureKindOf(message) {
+  if (/not authenticated|unsupported model|model.{0,35}(?:not available|not found)|missing dependenc|node_modules is missing/i.test(message)) return 'ENVIRONMENT_FAILURE'
+  if (/context.{0,30}(?:length|window|limit)|maximum context/i.test(message)) return 'CONTEXT_LIMIT'
+  if (/permission denied|access denied|\bEPERM\b|\bEACCES\b/i.test(message)) return 'PERMISSION_FAILURE'
+  if (/sandbox/i.test(message)) return 'SANDBOX_DENIAL'
+  return 'TOOL_FAILURE'
+}
 // </pure>
 
 const VERIFY_SKILL = "Follow the project's verify skill at .claude/skills/verify/SKILL.md"
@@ -572,7 +585,7 @@ async function run(plan) {
       allowTests: plan.allowTests, allowTestsReason: plan.allowTestsReason, readOnly: plan.readOnly === true,
     },
     attempts: history.map((a) => ({
-      cell: label(a.cell), pass: a.verdict.pass, reason: a.verdict.reason,
+      cell: label(a.cell), pass: a.verdict.pass, reason: a.verdict.reason, failure: a.failure ?? null,
       action: a.diagnosis?.action ?? null, actionReason: a.diagnosis?.reason ?? null,
       tokens: a.tokens, worktreePath: a.work?.worktreePath ?? null,
       modelContext: a.work?.summary ? { source: `worker ${label(a.cell)}`, text: a.work.summary } : null,
@@ -589,6 +602,7 @@ async function run(plan) {
   let ownWorktrees = false
   const runKey = String(args.runId ?? 'run').replace(/^[a-z]+-/, '').slice(0, 8)
 
+  let lastFailure
   for (let n = 1; n <= config.maxAttempts; n++) {
     phase(`Attempt ${n}`)
     const runWorker = () => {
@@ -613,7 +627,7 @@ async function run(plan) {
     let verdict
     let verifyTokens = 0
     let limited = worker.limit && limitFinal(`worker ${label(cell)}`, worker.limit)
-    if (!work) verdict = { pass: false, reason: `worker ${worker.error}`, output: '' }
+    if (!work) verdict = { pass: false, reason: `worker ${worker.error}`, output: '', agentError: true }
     else if (work.status === 'blocked') verdict = { pass: false, reason: `worker blocked: ${work.blockedReason}`, output: '' }
     else if (skippedSkills(work).length) verdict = { pass: false, reason: `worker skipped required skills: ${skippedSkills(work).map((s) => `${s.name} (${s.note})`).join('; ')}`, output: '' }
     else if (plan.readOnly && work.filesChanged.length) verdict = { pass: false, reason: `read-only task changed ${work.filesChanged.join(', ')}`, output: '' }
@@ -624,7 +638,7 @@ async function run(plan) {
         label: `verify ${label(verifierCell)}`, phase: `Attempt ${n}`, schema: verdictSchema(), agentType: 'model-ladder:verifier', ...verifierCell,
       })
       verifyTokens = verifier.tokens
-      verdict = verifier.result ?? { pass: false, reason: `verifier ${verifier.error}`, output: '' }
+      verdict = verifier.result ?? { pass: false, reason: `verifier ${verifier.error}`, output: '', agentError: true }
       limited = verifier.limit && limitFinal(`verifier ${label(verifierCell)}`, verifier.limit)
       // The workflow cannot run git; the verifier's workerFiles is the only proof the worktree changed.
       if (plan.verify && verdict.pass && !verdict.workerFiles?.length) {
@@ -652,8 +666,20 @@ async function run(plan) {
       })
     }
 
+    attempt.failure = failureKindOf(verdict.reason)
+    // Only an agent that died on its context stops here; a verdict that merely mentions a context window is a normal failure.
+    if (attempt.failure === 'CONTEXT_LIMIT' && verdict.agentError) {
+      return done('STOPPED', null, { reason: `Context limit reached: ${verdict.reason}`, suggestion: 'The context limit was hit, so no diagnosis was run. Shrink the task or split it.' })
+    }
+
     const moves = legalMoves(cell, config.tiers)
     if (n === config.maxAttempts || !moves.length) break
+
+    const failure = { tree: verdict.candidateTree, reason: verdict.reason }
+    if (repeatsFailure(lastFailure, failure)) {
+      return done('STOPPED', null, { reason: `Repeated failure: ${verdict.reason}`, suggestion: 'The same failure came back, so no diagnosis was run. Clarify the task, fix the environment, or adjust the ladder.' })
+    }
+    lastFailure = failure
 
     const diag = await measured(diagnosePrompt(history, moves), {
       label: `diagnose ${label(config.router)}`, phase: `Attempt ${n}`, schema: DIAGNOSIS_SCHEMA, agentType: 'model-ladder:router', ...config.router,

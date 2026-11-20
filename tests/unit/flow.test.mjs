@@ -2,7 +2,7 @@ import '../helpers/isolate-home.mjs'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { assessUsage } from '../../scripts/ladder-rules.mjs'
+import { assessUsage, repeatsFailure } from '../../scripts/ladder-rules.mjs'
 
 const src = readFileSync(new URL('../../workflows/ladder.js', import.meta.url), 'utf8').replace(/^export /m, '')
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor
@@ -185,14 +185,49 @@ test('a throwing diagnosis falls back to the default move', async () => {
 test('gives up after maxAttempts with a final diagnosis', async () => {
   const { out } = await runWith([
     { label: 'worker', result: done }, { label: 'verify', result: fail }, { label: 'diagnose', result: diag('raise_effort', 'haiku', 'high') },
-    { label: 'worker', result: done }, { label: 'verify', result: fail }, { label: 'diagnose', result: diag('raise_model', 'sonnet', 'high') },
-    { label: 'worker', result: done }, { label: 'verify', result: fail }, { label: 'diagnose', result: diag('raise_model', 'opus', 'low') },
-    { label: 'worker', result: done }, { label: 'verify', result: fail },
+    { label: 'worker', result: done }, { label: 'verify', result: { ...fail, reason: 'second failure' } }, { label: 'diagnose', result: diag('raise_model', 'sonnet', 'high') },
+    { label: 'worker', result: done }, { label: 'verify', result: { ...fail, reason: 'third failure' } }, { label: 'diagnose', result: diag('raise_model', 'opus', 'low') },
+    { label: 'worker', result: done }, { label: 'verify', result: { ...fail, reason: 'fourth failure' } },
     { label: 'final diagnosis', result: { reason: 'r', suggestion: 's' } },
   ])
   assert.equal(out.status, 'FAILED')
   assert.deepEqual(out.attempts.map((a) => a.cell), ['haiku/low', 'haiku/high', 'sonnet/high', 'opus/low'])
   assert.deepEqual(out.final, { reason: 'r', suggestion: 's' })
+})
+
+test('a failure repeating the previous candidate tree and reason stops without a diagnose call', async () => {
+  const same = { ...fail, candidateTree: 'a'.repeat(40) }
+  const { out, calls } = await runWith([
+    { label: 'worker', result: done }, { label: 'verify', result: same },
+    { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
+    { label: 'worker', result: done }, { label: 'verify', result: same },
+  ])
+  assert.equal(out.status, 'STOPPED')
+  assert.match(out.final.reason, /^Repeated failure/)
+  assert.equal(calls.filter((c) => c.label.startsWith('diagnose')).length, 1)
+})
+
+test('repeatsFailure needs both tree and reason to match the previous failure', () => {
+  const prior = { tree: 'a', reason: 'x' }
+  assert.equal(repeatsFailure(undefined, prior), false)
+  assert.equal(repeatsFailure(prior, { tree: 'a', reason: 'x' }), true)
+  assert.equal(repeatsFailure(prior, { tree: 'a', reason: 'y' }), false)
+  assert.equal(repeatsFailure(prior, { tree: 'b', reason: 'x' }), false)
+  assert.equal(repeatsFailure({ reason: 'x' }, { reason: 'x' }), false)
+})
+
+test('a failure differing in reason or candidate tree is still diagnosed', async () => {
+  for (const [second, why] of [[{ ...fail, reason: 'new reason' }, 'same tree'], [{ ...fail, candidateTree: 'b'.repeat(40) }, 'same reason']]) {
+    const { out, calls } = await runWith([
+      { label: 'worker', result: done }, { label: 'verify', result: fail },
+      { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
+      { label: 'worker', result: done }, { label: 'verify', result: second },
+      { label: 'diagnose', result: diag('raise_model', 'sonnet', 'low') },
+      { label: 'worker', result: done }, { label: 'verify', result: pass },
+    ])
+    assert.equal(out.status, 'CANDIDATE', why)
+    assert.equal(calls.filter((c) => c.label.startsWith('diagnose')).length, 2, why)
+  }
 })
 
 test('the top cell gives up without a diagnose call', async () => {
@@ -414,7 +449,7 @@ test('guard turned off mid-run: high usage never stops the run', async () => {
   const { out } = await runWith([
     { label: 'worker', result: done }, { label: 'verify', result: { ...fail, usage: live(false, 99) } },
     { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
-    { label: 'worker', result: done }, { label: 'verify', result: { ...fail, usage: live(false, 100) } },
+    { label: 'worker', result: done }, { label: 'verify', result: { ...fail, reason: 'other failure', usage: live(false, 100) } },
     { label: 'diagnose', result: diag('raise_model', 'sonnet', 'low') },
     { label: 'worker', result: done }, { label: 'verify', result: { ...pass, usage: live(false, 100) } },
   ], { usageGuard })
@@ -815,4 +850,36 @@ test('worker skills: the report lists each named capability, and an applicable, 
   const none = await runWith([{ label: 'worker', result: done }, { label: 'verify', result: pass }])
   assert.ok(!none.calls[0].schema.required.includes('skills'))
   assert.equal(none.out.attempts[0].skills, null)
+})
+
+test('a failure carries its classification; CONTEXT_LIMIT stops without a diagnose call', async () => {
+  const { out, calls } = await runWith([
+    { label: 'worker', throws: 'maximum context length exceeded' },
+  ])
+  assert.equal(out.status, 'STOPPED')
+  assert.match(out.final.reason, /Context limit/)
+  assert.equal(out.attempts[0].failure, 'CONTEXT_LIMIT')
+  assert.equal(calls.filter((c) => c.label.startsWith('diagnose')).length, 0)
+})
+
+test('a non-context failure is classified and still diagnosed', async () => {
+  const { out } = await runWith([
+    { label: 'worker', result: done }, { label: 'verify', result: fail },
+    { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
+    { label: 'worker', result: done }, { label: 'verify', result: pass },
+  ])
+  assert.equal(out.status, 'CANDIDATE')
+  assert.equal(out.attempts[0].failure, 'TOOL_FAILURE')
+  assert.equal(out.attempts[0].action, 'raise_effort')
+})
+
+test('a verdict that only mentions a context window is diagnosed, not stopped', async () => {
+  const { out } = await runWith([
+    { label: 'worker', result: done }, { label: 'verify', result: { ...fail, reason: 'context window percentage is not shown' } },
+    { label: 'diagnose', result: diag('raise_effort', 'haiku', 'medium') },
+    { label: 'worker', result: done }, { label: 'verify', result: pass },
+  ])
+  assert.equal(out.status, 'CANDIDATE')
+  assert.equal(out.attempts[0].failure, 'CONTEXT_LIMIT')
+  assert.equal(out.attempts[0].action, 'raise_effort')
 })

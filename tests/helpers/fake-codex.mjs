@@ -99,7 +99,7 @@ if (phase === 'verify') {
     writeFileSync(join(cwd, file), value)
   }
 }
-if (phase === 'verify') output = {pass:scenario.verifyPass ?? true,reason:scenario.verifyPass === false ? 'Requested behavior is missing' : 'Criteria met',output:'Inspected actual source'}
+if (phase === 'verify') output = {pass:scenario.verifyPass ?? true,reason:scenario.verifyPass === false ? scenario.verifyReason ?? 'Requested behavior is missing' : 'Criteria met',output:'Inspected actual source'}
 if (phase === 'verify' && command && command.code !== 0) output = {pass:false,reason:'Check failed',output:command.output}
 if (phase === 'diagnose') output = {action:scenario.stopEnvironment ? 'stop_environment':'raise_effort',model:scenario.invalidMove ? 'unavailable':'cheap',effort:scenario.invalidMove ? 'ultra':'medium',reason:'Retry',hint:'Fix the greeting'}
 if (scenario.badOutput === phase) output = {invalid:true}

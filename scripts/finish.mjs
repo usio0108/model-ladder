@@ -5,14 +5,16 @@
 // Each input also carries "runId", the runId preflight printed.
 // `--handoff` (no stdin) writes the template .model-ladder/HANDOFF.md from the last history entry instead.
 // Always removes this run's lock, so a crash or a "no" never leaves the guard armed for it.
+import { spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { canonical } from '../hooks/guard.mjs'
 import { artifactDir, git, print, pruneLeftoverBranches, removeWorktree, repoRoot, runDir, samePath, worktrees } from './common.mjs'
 import { readLocks, releaseLock } from './runs.mjs'
 import { applyResult, changed, protectedChange, snapshot } from './codex-worktree.mjs'
+import { inScope } from './task-contract.mjs'
 import { updateNote } from './update-check.mjs'
 import { claudeGuard, forceStopRuns } from './usage-guard.mjs'
 import { finishForecast, history } from './forecast.mjs'
@@ -57,7 +59,7 @@ function recordCandidate(runId, attemptText, phase) {
   return current.tree
 }
 
-function verifiedCandidate(root, run, state, result) {
+function verifiedCandidate(root, run, state, result, scope) {
   const { winner, attempts, plan } = result
   const cwd = winner.worktreePath
   const last = attempts.at(-1)
@@ -80,9 +82,23 @@ function verifiedCandidate(root, run, state, result) {
   const protection = [...state.protection.always, ...(plan.allowTests === true ? [] : state.protection.tests)]
   const protectedFile = protectedChange(root, state.baseTree, tree, protection)
   if (protectedFile) throw new Error(`Modified protected file ${protectedFile}`)
+  // An unclaimed or unbounded ('**') scope allows everything. shortcut: inScope matches literal paths only, so a glob entry would reject its matches; upgrade if the router starts claiming globs.
+  const outside = Array.isArray(scope) && !scope.includes('**') ? files.find((file) => !inScope(file, scope)) : undefined
+  if (outside) throw new Error(`Candidate changed ${outside}, outside the claimed scope`)
   if (!files.length) throw new Error('Candidate has no changes to apply')
+  let command = null
+  if (typeof plan.verify === 'string' && plan.verify.trim()) {
+    const started = Date.now()
+    const ran = spawnSync(plan.verify, { cwd, shell: true, encoding: 'utf8', timeout: 600000, maxBuffer: 64 << 20 })
+    const tail = (text) => String(text ?? '').slice(-4096).replace(/^[\uDC00-\uDFFF]/, '')
+    command = { command: plan.verify, exitCode: ran.status, durationMs: Date.now() - started, sandbox: 'HOST_UNSANDBOXED', stdout: tail(ran.stdout), stderr: tail(ran.stderr) }
+    const fail = (message) => { throw Object.assign(new Error(message), { command }) }
+    if (ran.error?.code === 'ETIMEDOUT') fail('Verify command timed out after 10 minutes')
+    if (ran.status !== 0) fail(`Verify command exited ${ran.status ?? ran.signal ?? ran.error?.message}`)
+    if (observeCandidate(cwd, run, state).tree !== tree) fail('Verify command changed the candidate tree')
+  }
   const outcome = applyResult(root, run, state.baseTree, tree, state.baseCommit, { commit: state.config.commit, goal: plan.goal, requireBaseFiles: true })
-  return outcome.patch ? { ...outcome, keep: cwd } : outcome
+  return outcome.patch ? { ...outcome, keep: cwd, command } : { ...outcome, command }
 }
 
 // Worktrees an earlier run kept (conflict, keepFailed, usage limit), as finish recorded them in history.
@@ -117,7 +133,7 @@ function cleanup(root, state, keep, known, runId, keepOrphans = false) {
   return orphans
 }
 
-function report(task, result, outcome, notes) {
+function report(task, result, outcome, notes, command) {
   const plan = result.plan
   const rows = result.attempts.map((a, i) => {
     const why = a.action ? `${a.action}: ${a.actionReason}` : a.pass ? '—' : a.reason
@@ -146,6 +162,7 @@ function report(task, result, outcome, notes) {
   const skillState = (s) => (s.used ? 'used' : !s.applies ? 'not applicable' : !s.available ? 'unavailable' : 'skipped')
   const skills = (result.attempts ?? []).flatMap((a, i) => a.skills?.length ? [`#${i + 1} ${a.skills.map((s) => `${s.name} ${skillState(s)}`).join(', ')}`] : [])
   if (skills.length) lines.push(`Skills    ${skills.join(' · ')}`)
+  if (command) lines.push(`Command   ${command.command} (exit ${command.exitCode}, ${command.durationMs} ms, ${command.sandbox})`)
   if (outcome.handoff) lines.push(`Handoff   ${outcome.handoff}`)
   // A read-only attempt's report is the deliverable; nothing else carries it back.
   if (result.status === 'VERIFIED' && !outcome.files?.length && result.winner?.summary) lines.push('', 'Report', '', result.winner.summary)
@@ -235,15 +252,18 @@ function main(input) {
   let keep = []
 
   let verificationError
+  let command = null
   if (['CANDIDATE', 'VERIFIED'].includes(result?.status)) {
     if (!runId || !readLocks(root).some((lock) => lock.runId === runId && lock.runtime === 'claude')) throw new Error('Candidate has no active Claude run')
     try {
       if (!state.baseCommit) throw new Error('Verifier candidate evidence is missing')
-      outcome = verifiedCandidate(root, files, state, result)
+      outcome = verifiedCandidate(root, files, state, result, readLocks(root).find((lock) => lock.runId === runId)?.scope)
+      command = outcome.command ?? null
       result = { ...result, status: outcome.keep ? 'CONFLICT' : 'VERIFIED' }
       if (outcome.keep) keep = [outcome.keep]
     } catch (failure) {
       verificationError = failure.message
+      command = failure.command ?? null
       const cwd = result.winner.worktreePath
       if (state.before && typeof cwd === 'string' && !sameCandidatePath(root, cwd) && candidateLocation(root, cwd, state)) keep = [cwd]
       result = { ...result, status: 'FAILED', final: { reason: verificationError, suggestion: 'Verify a fresh candidate before applying changes.' } }
@@ -292,6 +312,7 @@ function main(input) {
     tokens: result?.tokens ?? null,
     applied: outcome.applied,
     committed: Boolean(outcome.committed),
+    command,
     kept: keep,
     ...(terminationFailures.length && { terminationFailures }),
     error: error ?? verificationError ?? null,
@@ -300,8 +321,14 @@ function main(input) {
   if (aborted) return `model-ladder stopped before running: ${aborted}`
 
   if (result?.status === 'USAGE_LIMIT') {
+    const text = handoff(task, result, lastWorktree)
     outcome.handoff = join(run, 'HANDOFF.md')
-    writeFileSync(outcome.handoff, handoff(task, result, lastWorktree))
+    writeFileSync(outcome.handoff, text)
+    if (runId) {
+      mkdirSync(join(run, 'runs'), { recursive: true })
+      outcome.handoff = join(run, 'runs', `${runId}.HANDOFF.md`)
+      writeFileSync(outcome.handoff, text)
+    }
   }
 
   if (result?.status === 'DIRECT') {
@@ -309,7 +336,7 @@ function main(input) {
       'Next      The calling session does the task itself. Start the task with --ladder to force the ladder.', ...notes.flatMap((n) => ['', n])].join('\n')
   }
   if (error) return [`model-ladder ── ERROR`, '', `Task      ${task}`, `Error     ${error}`, '', 'Worktrees and the run lock were cleaned up.', ...notes].join('\n')
-  return report(task, result, outcome, notes)
+  return report(task, result, outcome, notes, command)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

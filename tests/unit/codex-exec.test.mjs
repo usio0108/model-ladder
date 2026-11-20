@@ -195,3 +195,18 @@ test('codexExec hands env to the child and to its sandboxed commands without cha
   assert.equal(seen.args[seen.args.indexOf('-c') + 1], 'model_reasoning_effort="low"')
   assert.equal(process.env.UV_CACHE_DIR, before)
 })
+
+test('codexExec counts turn.completed usage streamed before the 128 KiB stdout tail', async (t) => {
+  const run = mkdtempSync(join(tmpdir(), 'ladder-usage-'))
+  t.after(() => rmSync(run, { recursive: true, force: true }))
+  const script = `const args = process.argv.slice(1); const out = args[args.indexOf('-o') + 1]
+    process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 7, output_tokens: 3 } }) + '\\n')
+    process.stdout.write('x'.repeat(200000) + '\\n')
+    process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }))
+    require('node:fs').writeFileSync(out, JSON.stringify({ status: 'done', summary: 's', blockedReason: null }))`
+  const { usage } = await codexExec({
+    phase: 'worker', cell: { model: 'test', effort: 'low' }, cwd: run, run, prompt: 'test', sandbox: 'read-only', timeoutMs: 10000,
+    executable: { command: process.execPath, prefixArgs: ['-e', script, '--'] },
+  })
+  assert.deepEqual(usage, [{ input_tokens: 7, output_tokens: 3 }, { input_tokens: 1, output_tokens: 1 }])
+})

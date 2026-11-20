@@ -68,7 +68,7 @@ function worktree(dir, name, edits) {
 const candidateTree = (wt, runId, phase) => execFileSync(process.execPath, [script('finish'), '--candidate', runId, '1', phase], { cwd: wt, encoding: 'utf8' }).trim()
 const verified = (wt, files, runId) => ({
   status: 'CANDIDATE',
-  plan: { goal: 'fix b', verify: 'pytest', start: 'haiku/low', startReason: 'small', allowTests: false, allowTestsReason: 'bug fix' },
+  plan: { goal: 'fix b', verify: 'node -e 0', start: 'haiku/low', startReason: 'small', allowTests: false, allowTestsReason: 'bug fix' },
   attempts: [{ cell: 'haiku/low', pass: true, reason: 'ok', action: null, actionReason: null, tokens: 100, worktreePath: wt }],
   winner: { worktreePath: wt, filesChanged: files, ...(runId && candidateTree(wt, runId, 'before') && { candidateTree: candidateTree(wt, runId, 'after') }) },
   final: null,

@@ -40,10 +40,11 @@ Only a `LOW` risk `DIRECT` policy with no review is eligible: one file, `coverag
 `check --run <id>` runs these steps in order:
 
 1. It rejects a moved `HEAD`.
-2. It snapshots the checkout and rejects out-of-scope, contract-protected, test, verify-input and npm-script changes.
-3. It runs the verify command in a clean worktree built from that snapshot.
-4. It rejects verification that changed files.
-5. It snapshots the checkout again and returns `CONFLICT` if the checkout changed while verification ran.
+2. It returns `BLOCKED` (`ACTIVE_RUN`) if a ladder run became active after `begin`, using the same lock check as `begin`.
+3. It snapshots the checkout and rejects out-of-scope, contract-protected, test, verify-input and npm-script changes.
+4. It runs the verify command in a clean worktree built from that snapshot.
+5. It rejects verification that changed files.
+6. It snapshots the checkout again and returns `CONFLICT` if the checkout changed while verification ran.
 
 A failed check delivers nothing, and the draft stays in the checkout for one repair. A timeout is `INCONCLUSIVE`. Checks beyond `limits.maxAttempts` (default 2) return `ATTEMPTS_EXHAUSTED`. Each check appends one history line with v2-shaped evidence and telemetry.
 

@@ -29,6 +29,26 @@ jobs:
         env:
           MODEL_LADDER_NO_UPDATE_CHECK: '1'
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Tracked files only, so node_modules and .claude/worktrees are never checked.
+      - name: Syntax check
+        run: git ls-files -z '*.mjs' '*.js' | xargs -0 -n1 node --check
+      # Installed on the fly (major pinned) so package.json gains no dependency; --ignore-scripts skips the node-pty native build.
+      - name: ESLint
+        run: |
+          npm install --no-save --ignore-scripts eslint@9 @eslint/js@9
+          npx eslint .
+      - name: Generated rules match workflows/ladder.js
+        run: node scripts/sync-rules.mjs --check
+
   version:
     runs-on: ubuntu-latest
     steps:

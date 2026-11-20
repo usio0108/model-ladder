@@ -91,6 +91,7 @@ test('finish on USAGE_LIMIT force-stops the other ladder runs on this machine an
     assert.equal(await exitedWithin(other, 5000), true, 'the other run was killed')
     assert.match(readFileSync(join(dir, '.model-ladder', 'HANDOFF.md'), 'utf8'), /USAGE_LIMIT: The worker haiku\/low hit Claude's subscription limit/)
     const theirs = readFileSync(join(otherRoot, '.model-ladder', 'HANDOFF.md'), 'utf8')
+    assert.equal(theirs, readFileSync(join(otherRoot, '.model-ladder', 'runs', 'codex-busy.HANDOFF.md'), 'utf8'), 'the stopped run keeps its own handoff')
     assert.match(theirs, /## Task\nother task\n/)
     assert.match(theirs, /Status: USAGE_LIMIT/)
     assert.match(theirs, /## Stopped\nForce-stopped: The worker haiku\/low hit Claude's subscription limit/)
@@ -196,4 +197,15 @@ test('docs mention the AI-written handoff and the availability warning in both l
     assert.match(changelog, /HANDOFF\.md/, file)
     assert.match(changelog, /worker_skills/, file)
   }
+})
+
+test('writeHandoff keeps a per-run copy for each run and returns its path; the shared file is the latest writer', () => {
+  const dir = repo()
+  const paths = ['codex-a', 'codex-b'].map((runId) => writeHandoff(dir, { live: { runId, task: `task of ${runId}`, input: { task: runId }, agents: [] } }))
+  assert.deepEqual(paths, ['codex-a', 'codex-b'].map((id) => join(dir, '.model-ladder', 'runs', `${id}.HANDOFF.md`)))
+  assert.match(readFileSync(paths[0], 'utf8'), /task of codex-a/)
+  assert.doesNotMatch(readFileSync(paths[0], 'utf8'), /codex-b/)
+  assert.match(readFileSync(paths[1], 'utf8'), /task of codex-b/)
+  assert.match(readFileSync(join(dir, '.model-ladder', 'HANDOFF.md'), 'utf8'), /task of codex-b/)
+  assert.equal(writeHandoff(dir, { live: { task: 'no id', agents: [] } }), join(dir, '.model-ladder', 'HANDOFF.md'))
 })

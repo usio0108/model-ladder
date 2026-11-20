@@ -9,7 +9,6 @@ import { repoRoot } from './common.mjs'
 
 const UNKNOWN = 'UNKNOWN'
 const number = (value) => Number.isSafeInteger(value) && value >= 0
-const plus = (a, b) => number(a) && number(b) ? a + b : UNKNOWN
 // Same rule as usageEvidence: a stage is known only when every call reported every turn. No call means 0.
 function measure(calls, keys = { input: 'input_tokens', output: 'output_tokens', cached: 'cached_input_tokens' }) {
   const sum = (key) => {
