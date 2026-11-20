@@ -172,7 +172,7 @@ function uvRepo(t, { venv = true, scenario = {} } = {}) {
   write('.codex/model-ladder.json', JSON.stringify({
     router: { model: 'cheap', effort: 'low' }, verifier: { model: 'cheap', effort: 'low' },
     tiers: [{ model: 'cheap', efforts: ['low', 'medium'], maxEffortJump: 1 }],
-    verify: `node "${uv}" run pytest`, maxAttempts: 2,
+    verify: `node "${uv}" run pytest`, maxAttempts: 2, direct_threshold: 'off',
   }))
   git(root, 'add', '-A')
   git(root, 'commit', '-qm', 'fixture')
@@ -294,7 +294,7 @@ test('a Node project without node_modules reports frontend checks as not run, ne
   write('package.json', JSON.stringify({ name: 'web', private: true, scripts: { test: 'node check.mjs' }, devDependencies: { vitest: '1.0.0' } }))
   write('check.mjs', 'import { existsSync } from "node:fs"\nif (!existsSync("node_modules/vitest")) { console.error("vitest: not found"); process.exit(127) }\n')
   write('scenario.json', '{}')
-  write('.codex/model-ladder.json', JSON.stringify({ router: { model: 'cheap', effort: 'low' }, verifier: { model: 'cheap', effort: 'low' }, tiers: [{ model: 'cheap', efforts: ['low', 'medium'], maxEffortJump: 1 }], verify: 'npm test', maxAttempts: 2 }))
+  write('.codex/model-ladder.json', JSON.stringify({ router: { model: 'cheap', effort: 'low' }, verifier: { model: 'cheap', effort: 'low' }, tiers: [{ model: 'cheap', efforts: ['low', 'medium'], maxEffortJump: 1 }], verify: 'npm test', maxAttempts: 2, direct_threshold: 'off' }))
   git(root, 'add', '-A')
   git(root, 'commit', '-qm', 'fixture')
   // The main checkout has its dependencies; the attempt worktree does not, and no junction lends them.
