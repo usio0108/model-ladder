@@ -40,7 +40,8 @@ function fixture(scenario = {}, overrides = {}) {
   write(dir, '.codex/model-ladder.json', JSON.stringify({
     router: { model: 'cheap', effort: 'low' }, verifier: { model: 'cheap', effort: 'low' },
     tiers: [{ model: 'cheap', efforts: ['low', 'medium', 'high'], maxEffortJump: 1 }, { model: 'strong', efforts: ['low', 'high'], maxEffortJump: 1 }],
-    verify: 'node --test tests/check.test.mjs', maxAttempts: 3, ...overrides,
+    // The fake router calls every task small; DIRECT is off here so the ordinary ladder tests reach a worker.
+    verify: 'node --test tests/check.test.mjs', maxAttempts: 3, direct_threshold: 'off', ...overrides,
   }))
   git(dir, 'add', '-A')
   git(dir, 'commit', '-qm', 'fixture')
@@ -349,22 +350,23 @@ test('v2 Claude consumes the same contract and returns shared evidence', async (
   assert.equal(isolated.verificationSandbox.status, 'SANDBOX_UNAVAILABLE')
   cleaned(dir)
 })
-test('matching session token count enables the DIRECT route', async () => {
-  const dir = fixture()
-  const previous = process.env.CODEX_THREAD_ID
-  const id = 'abcdefab-1234-1234-1234-abcdefabcdef'
-  const file = join(NO_USAGE, 'sessions', `rollout-${id}.jsonl`)
-  try {
-    process.env.CODEX_THREAD_ID = id
-    mkdirSync(join(NO_USAGE, 'sessions'), { recursive: true })
-    writeFileSync(file, [JSON.stringify({ type: 'session_meta', payload: { id, cwd: dir } }), JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 70 }, model_context_window: 100 } } })].join('\n'))
-    const result = await run(dir)
-    assert.equal(result.status, 'DIRECT', JSON.stringify(result))
-    assert.deepEqual(calls(dir).map((call) => call.phase), ['route'])
-  } finally {
-    if (previous === undefined) delete process.env.CODEX_THREAD_ID; else process.env.CODEX_THREAD_ID = previous
-    rmSync(file, { force: true })
-  }
+test('a small task goes DIRECT with no context measurement; forceLadder and off keep the ladder', async () => {
+  const dir = fixture({}, { direct_threshold: 'on' })
+  const result = await run(dir)
+  assert.equal(result.status, 'DIRECT', JSON.stringify(result))
+  assert.deepEqual(calls(dir).map((call) => call.phase), ['route'])
+  assert.match(calls(dir)[0].prompt, /read-only question, explanation or analysis/)
+  const legacy = fixture({}, { direct_threshold: 5 })
+  assert.equal((await run(legacy)).status, 'DIRECT')
+  const forced = fixture({}, { direct_threshold: 'on' })
+  assert.notEqual((await run(forced, { forceLadder: true })).status, 'DIRECT')
+  const off = fixture()
+  assert.notEqual((await run(off)).status, 'DIRECT')
+  assert.doesNotMatch(calls(off)[0].prompt, /Also return small/)
+  const bad = fixture({}, { direct_threshold: 'sometimes' })
+  const rejected = await run(bad)
+  assert.equal(rejected.status, 'ERROR')
+  assert.match(rejected.message, /direct_threshold must be "on" or "off"/)
 })
 test('historical phase medians take precedence over first-run router estimates', async () => {
   const dir = fixture({ workerMinutes: 8, verifyMinutes: 6 })

@@ -78,8 +78,8 @@ Call the Workflow tool with name `model-ladder:ladder` and args `{ "task": "<tas
 - `workflowArgs.usageGuard`: the command the verifier runs to read the usage guard as the user has set it right now. Pass it unchanged, whether the guard is on or off.
 
 - If `workflowArgs` already has `contextTokens` and `contextWindow`, they are the band's measured values: use them and do not estimate. `...workflowArgs` comes last in the args, so they override anything you put before it. Estimate only the ones it lacks.
-- `contextTokens`: your estimate of this session's current context size in tokens. Orchestration re-reads this context on every turn.
-- `contextWindow`: your estimate of this session's context window size in tokens (for example 200000 or 1000000). The workflow returns DIRECT for a small task when `contextTokens / contextWindow * 100` reaches `workflowArgs.directThreshold` (`off` = never); pass `workflowArgs` unchanged.
+- `contextTokens`: your estimate of this session's current context size in tokens.
+- `contextWindow`: your estimate of this session's context window size in tokens (for example 200000 or 1000000). Neither value decides DIRECT: the workflow returns DIRECT when the router judges the task small, unless `forceLadder` is set or `workflowArgs.directThreshold` is `off`; pass `workflowArgs` unchanged.
 - `forceLadder`: true when the task starts with `--ladder`; drop that flag from the task.
 
 Preflight enables the backend timing journal. Around **every** Workflow call, including the first routing call and every continuation, run the Node boundary recorder from the main repository:

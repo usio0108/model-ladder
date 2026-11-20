@@ -39,18 +39,10 @@ function pickMove(choice, cell, tiers) {
   return match ?? moves[0] ?? null
 }
 
-// Orchestration re-reads the caller's context on every turn; once the session holds this percentage of its
-// context window, a small task costs less done directly. "off" never goes direct. Provisional: see DESIGN.md.
-const DEFAULT_WINDOW = 200000
-const DEFAULT_DIRECT_THRESHOLD = 30
-
-function contextPercent(contextTokens, contextWindow) {
-  return ((contextTokens ?? 0) / (contextWindow > 0 ? contextWindow : DEFAULT_WINDOW)) * 100
-}
-
-function isDirect(small, contextTokens, forceLadder, contextWindow, directThreshold = DEFAULT_DIRECT_THRESHOLD) {
-  if (forceLadder || !small || directThreshold === 'off') return false
-  return contextPercent(contextTokens, contextWindow) >= directThreshold
+// DIRECT follows the router's small judgment alone. direct_threshold is an on/off switch: "off" never goes
+// direct; "on" or any legacy number (1-100) allows it.
+function isDirect(small, forceLadder, direct) {
+  return small && !forceLadder && direct !== 'off'
 }
 
 const FORECAST_MAX_AGE = 90 * 86400000

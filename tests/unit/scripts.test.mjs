@@ -206,16 +206,18 @@ test('plugin skill options apply to every project; a project key wins; an unfill
   assert.deepEqual(withOptions(dir, { worker_skills: 'plugin worker', verifier_skills: 'plugin verifier' }).workflowArgs.skills, { worker: 'project worker', verifier: '' })
 })
 
-test('direct_threshold: plugin picker, default 30, project overrides, bad value is an ERROR', () => {
+test('direct_threshold: on/off switch, default on, legacy numbers still accepted, bad value is an ERROR', () => {
   const root = fileURLToPath(new URL('../../', import.meta.url))
   const opt = JSON.parse(read(root, '.claude-plugin/plugin.json')).userConfig.direct_threshold
-  assert.deepEqual(opt.options, ['20', '30', '40', '50', '60', '70', '80', 'off'])
-  assert.equal(opt.default, '30')
+  assert.deepEqual(opt.options, ['on', 'off'])
+  assert.equal(opt.default, 'on')
+  assert.doesNotMatch(opt.description, /context|%/)
   const dir = repo()
-  assert.equal(preflight(dir).workflowArgs.directThreshold, 30)
+  assert.equal(preflight(dir).workflowArgs.directThreshold, 'on')
+  assert.equal(withOptions(dir, { direct_threshold: 'on' }).workflowArgs.directThreshold, 'on')
   assert.equal(withOptions(dir, { direct_threshold: '50' }).workflowArgs.directThreshold, 50)
   assert.equal(withOptions(dir, { direct_threshold: 'off' }).workflowArgs.directThreshold, 'off')
-  assert.equal(withOptions(dir, { direct_threshold: '${user_config.direct_threshold}' }).workflowArgs.directThreshold, 30)
+  assert.equal(withOptions(dir, { direct_threshold: '${user_config.direct_threshold}' }).workflowArgs.directThreshold, 'on')
   write(dir, '.claude/model-ladder.json', JSON.stringify({ direct_threshold: 70 }))
   git(dir, 'add', '-A')
   git(dir, 'commit', '-q', '-m', 'dt')
@@ -226,6 +228,10 @@ test('direct_threshold: plugin picker, default 30, project overrides, bad value 
   const bad = preflight(dir)
   assert.equal(bad.status, 'ERROR')
   assert.match(bad.message, /direct_threshold must be/)
+  write(dir, '.claude/model-ladder.json', JSON.stringify({ direct_threshold: 101 }))
+  git(dir, 'add', '-A')
+  git(dir, 'commit', '-q', '-m', 'bad2')
+  assert.equal(preflight(dir).status, 'ERROR')
 })
 
 test('preflight enables measured workflow boundaries and removes the split option', () => {

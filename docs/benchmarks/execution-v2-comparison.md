@@ -10,7 +10,7 @@ The Claude Code handoff on November 19, 2026 ran no pilot slot. Coverage is stil
 - The frozen arms' Codex legacy sandbox modes let tool commands read a fake credential file in `$CODEX_HOME`.
 - Claude file-tool and Workflow containment has no live evidence.
 
-The frozen sources are unchanged: B at `c31e536` and C at `e6fe5b9`. A working-tree fix to the strict verifier is not part of either arm. The pilot design does not depend on that fix. [Handoff validation](../audits/claude-handoff-validation.md)
+The frozen sources are unchanged: B at `c31e536` and C at `e6fe5b9`. A working-tree fix to the strict verifier is not part of either arm. The pilot design does not depend on that fix.
 
 **Codex pilot driver.** `tests/e2e/codex-pilot.mjs` now runs the four Codex pilot slots under the verified boundary. Its offline mock flow and nine security regression cases pass. Mock rows are pipeline checks and are never recorded as trials. The Codex slots wait for a sign-in and a passing live canary. The Claude slots remain BLOCKED. Live pilot coverage is still **0/8** and formal coverage **0/102**. [Driver and commands](benchmark-environment.md#codex-pilot-driver)
 

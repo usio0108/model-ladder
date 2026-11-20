@@ -78,7 +78,7 @@ Codex 的認證、模型存取與 sandbox 錯誤直接停止，不升級重試�
 Codex worker 與 verifier 的 sandbox 沒有網路，worktree 也沒有 `.venv` 或 `node_modules`。uv 專案透過角色環境變數以唯讀方式借用主 checkout 的 `.venv`（`scripts/codex-run.mjs` 的 `sandboxEnv`）；沒有該 `.venv` 的 uv 驗證，或缺少 `node_modules` 而失敗的 npm 類檢查，只停止一次，不升級重試。
 驗證命令與 verifier 在以 worker 快照建立的獨立 `attempt-<n>-verify` worktree 中執行，避開 worker 留下的 ignored 檔案。每個完成的階段都會將 worktree 與候選快照比對。若該階段修改了 repository 檔案，runner 會阻擋後續覆核或套用。需要保留草稿時，runner 保留 worker 的 worktree。
 
-確定性驗證命令預設由 runner 的主機 shell 執行，並繼承 runner 的環境。要求隔離時，runner 使用原生 `codex sandbox` 與限制檔案系統和網路的 profile。路由前及命令啟動前都會探測隔離是否有效。Codex 角色發出的 shell 命令則受該角色的原生設定管理。Git worktree 提供各自的 checkout 並共用 Git metadata。見[驗證安全稽核](docs/audits/verification-safety.md)。
+確定性驗證命令預設由 runner 的主機 shell 執行，並繼承 runner 的環境。要求隔離時，runner 使用原生 `codex sandbox` 與限制檔案系統和網路的 profile。路由前及命令啟動前都會探測隔離是否有效。Codex 角色發出的 shell 命令則受該角色的原生設定管理。Git worktree 提供各自的 checkout 並共用 Git metadata。
 
 Claude Workflow 在 verifier 記錄一致的驗證前後 Git tree 後回傳 `CANDIDATE`。Finish 讀取證據，以暫存 index 重建 worktree 快照，並透過現有 apply mutex 套用已覆核的 tree。Finish 決定最終的 `VERIFIED`、`FAILED` 或 `CONFLICT`。Claude `DIRECT` 仍由呼叫端 session 處理。
 
@@ -116,7 +116,7 @@ Hook 屬提前防護，Node 不可用時放行，最終 diff 檢查仍執行保�
 
 | 功能 | 規則 |
 |---|---|
-| DIRECT | 小任務且實測 context 達 `direct_threshold`，路由決定本身不等於通過驗證。 |
+| DIRECT | router 判定為小任務（範圍明確的微小修改，或任何唯讀的問答與分析）且 `direct_threshold` 為 `on`，不看 context 大小，路由決定本身不等於通過驗證。 |
 | Claude DIRECT | 主 session 修改後交獨立 verifier，最多三輪修正。 |
 | Codex DIRECT | 呼叫端修改隔離草稿，`directRun` 再認領範圍、核對基線、驗證及套用。 |
 | 預估 | 耗時範圍、階段實際計時與各用量時間窗的餘額評估；面板顯示經過/預估；時間窗不足或有風險時在 worker 前確認一次。 |

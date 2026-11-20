@@ -25,7 +25,7 @@ Execution v2 is opt-in. A task contract selects a risk-based profile without a m
 
 - **Isolated Git worktrees**: each attempt runs in its own worktree.
 - **Escalation when appropriate**: verification failure may lead to a stronger model or higher effort.
-- **DIRECT for small tasks**: when actual session context reaches the configured threshold, the session handles small tasks and still submits them for independent verification.
+- **DIRECT for small tasks**: when the router judges a task small (a trivial bounded change, or any read-only question, explanation or analysis), the session handles it and still submits changes for independent verification. Context size plays no part; `direct_threshold` can switch DIRECT off.
 - **Forecasts**: each agent row's time column shows that agent's own elapsed time over its own expected duration (for example `5s/12m`; once a running agent overruns it, the expected duration is recalibrated in steps, and a finished row keeps its original value) on worker, test-writer and verifier rows, from earlier successful runs or, before any history, the router's per-attempt minutes; router, diagnose and final-diagnosis rows show elapsed only, and when the startup forecast says a subscription window is insufficient or at risk, the ladder asks once before any worker starts.
 - **Concurrent runs**: runs with separate file scopes can proceed together, with overlap checks and serialized application of results.
 - **Automatic routing and layered settings**: session hooks enable the ladder by default, with personal settings and project overrides.
@@ -155,7 +155,7 @@ For Claude settings outside the plugin screen, use `~/.claude/model-ladder.json`
 | `band` | `true` | Show the band or panel. |
 | `worker_skills` (**Worker skill instructions**) | Empty | Skills or tools for workers and test-writers. Each worker reports every named capability; one that applies and is available but was not used fails the attempt. |
 | `verifier_skills` (**Verifier skill instructions**) | Empty | Skills or tools for verification. |
-| `direct_threshold` | `30` | Context percentage for small tasks to use DIRECT; `off` disables it. |
+| `direct_threshold` | `on` | On/off switch for DIRECT on small tasks; `off` disables it. Legacy numbers 1-100 count as `on`. |
 | `usageGuard` | On, `90%` | Stop at the configured usage threshold. |
 
 Project settings in `.claude/model-ladder.json` or `.codex/model-ladder.json` override personal settings; keep usage protection in your personal file unless the project needs an override.

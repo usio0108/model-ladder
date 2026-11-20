@@ -154,7 +154,7 @@ test('Claude Code settings read ~/.claude/model-ladder.json between the defaults
 test('direct_threshold layers: default, user file, project file, plugin option', () => {
   const user = freshUserConfig()
   const repo = tmp()
-  assert.equal(loadClaude(repo).config.direct_threshold, 30)
+  assert.equal(loadClaude(repo).config.direct_threshold, 'on')
   writeJson(user, { direct_threshold: 40 })
   assert.equal(loadClaude(repo).config.direct_threshold, 40)
   assert.equal(loadClaude(repo, { direct_threshold: '60' }).config.direct_threshold, 60)

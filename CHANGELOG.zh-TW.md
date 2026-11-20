@@ -4,6 +4,12 @@
 
 版本遵循 semantic versioning，Claude Code 更新需提升 `.claude-plugin/plugin.json` 的版本。
 
+## [1.3.1] - 2026-11-20
+
+- **DIRECT 不再看 context 大小。** 是否走 DIRECT 只由 router 的 `small` 判斷決定，不再看 session 的 context 百分比。以前即使是小任務，在剛開的 session（例如 1M window 用了 6%，門檻 40%）仍會跑完整的 router、worker 與 verifier。只讀的問題、解釋與分析類任務現在都算 `small`。`forceLadder` 仍會關閉 DIRECT，DIRECT 的結果仍會獨立驗證。
+- `direct_threshold` 改為 `on`/`off` 開關，預設 `on`。舊的數字設定（1-100）仍可使用，視為 `on`。外掛選單只提供 `on` 與 `off`。Codex run 不再讀取 context token 來判斷 DIRECT，Codex skill 也不再要求傳入 `contextTokens` 與 `contextWindow`。
+- 文件：`DESIGN`、`USAGE` 與 `docs/` 下的文件改為描述新的 DIRECT 規則。audit、migration 與 architecture 文件只保留尚未完成的項目；`docs/audits/verification-safety.md`、`docs/audits/claude-handoff-validation.md` 與 `docs/migration/native-first.md` 的內容已全部完成或移到其他文件，因此刪除。
+
 ## [1.3.0] - 2026-11-19
 
 - **Local Fast Path**：`/model-ladder:run` 與 Codex skill 會先嘗試快速路徑：當 session 能指出任務只改的那一個檔案，且專案的 verify 指令能完整檢查結果時，`scripts/fast-path.mjs` 套用 Execution v2 風險規則，由 session 修改該檔，再於乾淨 worktree 中對同一份 snapshot 執行 verify 指令，不啟動 router、worker 或 verifier agent。其他任務、有未提交變更或有其他 ladder run 進行中時，照舊走 ladder。

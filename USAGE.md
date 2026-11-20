@@ -94,7 +94,7 @@ Pruning removes completed artifacts but preserves active runs, conflicts, patche
 
 | Operation | Required steps |
 |---|---|
-| DIRECT | Supply actual `contextTokens` and `contextWindow`; the router must also judge the task small. |
+| DIRECT | The router must judge the task small (a trivial bounded change or any read-only question or analysis). Context size is not considered. |
 | Complete DIRECT | Edit only the returned `worktreePath`, then resubmit the original input with `directRun` and `directSummary`. |
 | Force normal ladder | Use `forceLadder: true`, which disables DIRECT. |
 | Run a large task | If the forecast says usage may run out, answer the usage-risk question (`acceptUsageRisk: true` continues). |
@@ -127,11 +127,11 @@ Personal files are `~/.claude/model-ladder.json` and `~/.codex/model-ladder.json
 | `timeoutMs` | `600000` | Codex idle timeout per role or verify command. |
 | `usageGuard` | Enabled, `90%` | Usage protection, preferably stored in the personal file. |
 | `worker_skills` / `verifier_skills` | Empty | Natural-language role instructions. Named capabilities that apply are mandatory: the worker must actually invoke them, not just follow them in spirit. |
-| `direct_threshold` | `30` | Context percentage for small-task DIRECT, or `"off"`. |
+| `direct_threshold` | `"on"` | `"on"` or `"off"` switch for small-task DIRECT. Legacy numbers 1–100 count as `"on"`. |
 | `autoRun` / `band` | `true` | Default routing and display controls. |
 
 Claude model aliases follow available versions; configure Codex model IDs and efforts for your account.
-Claude's plugin picker offers DIRECT values 20–80 in steps of 10, plus `off`.
+Claude's plugin picker offers DIRECT values `on` and `off`.
 Without explicit `verify`, Codex prefers a project verify skill, then discovers existing npm, pytest, Cargo, Go, Maven, or Make checks.
 
 ### Codex sandbox: uv and Node projects

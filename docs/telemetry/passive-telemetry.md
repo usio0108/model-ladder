@@ -17,7 +17,7 @@
 
 - `models.source` is `observed` when the provider reported model IDs. It is `configured` when only the configured cell is known.
 - Router tokens include routing and failure diagnosis. Reviewer tokens are the verifier or reviewer role. Retry tokens are a subset of the stage totals. For legacy Codex, retry covers everything from the first diagnosis on.
-- `UNKNOWN` is never zero. A stage with no calls is zero. Older Claude lines that wrote `0` for a run with attempts are `UNKNOWN`. `finish.mjs` now writes `null` when the Workflow reports no total.
+- `UNKNOWN` is never zero. A stage with no calls is zero. Older Claude lines that wrote `0` for a run with attempts are `UNKNOWN`. `finish.mjs` writes `null` when the Workflow reports no total.
 - `billing` is `UNKNOWN`. History cannot tell API billing from subscription use. `subscriptionDelta` gives the percentage-point change between the subscription samples taken at run start and end. Other activity on the account can be included. No money cost is computed or estimated.
 - Records copy only whitelisted fields. They exclude task text, prompts, summaries, reasons, command output and credentials. History lines themselves still hold the task text, as before.
 

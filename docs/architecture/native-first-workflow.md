@@ -6,18 +6,10 @@ model-ladder now has three paths. Each one reuses existing Execution v2 code and
 - **Managed path.** This is the existing ladder or an Execution v2 contract, used when the policy does not select `DIRECT`.
 - **Cloud Safe Path.** The session prepares a handoff and the person starts the official cloud agent. GitHub CI decides readiness.
 
-## Before and after
+## Paths
 
 ```mermaid
 flowchart TD
-    subgraph Before[Before: every plain task]
-        B1[Session] --> B2[Router agent, model call]
-        B2 --> B3[Worker agent, model call]
-        B3 --> B4[Verifier agent, model call]
-        B4 -->|fail| B5[Diagnosis, model call] --> B3
-        B4 -->|pass| B6[Apply]
-    end
-    subgraph After[After: Local Fast Path first]
         A1[Session writes a task contract] --> A2[fast-path begin: deterministic risk policy]
         A2 -->|NOT_ELIGIBLE or BLOCKED| M[Existing managed ladder, unchanged]
         A2 -->|READY, LOW risk, DIRECT| A3[Session edits the one scoped file]
@@ -25,12 +17,11 @@ flowchart TD
         A4 -->|VERIFIED| A5[Evidence and telemetry in history.jsonl]
         A4 -->|FAILED or CONFLICT| A6[Not delivered; one repair, then report]
         A5 --> C[Optional: ci-evidence for remote CI]
-    end
 ```
 
 | Path | Model calls started by model-ladder | Verification | Delivery |
 | --- | --- | --- | --- |
-| Before, legacy ladder | Router 1, worker 1 or more, verifier 1 or more, diagnosis per retry | Verifier agent and the verify command | Applied after verification |
+| Legacy ladder | Router 1, worker 1 or more, verifier 1 or more, diagnosis per retry | Verifier agent and the verify command | Applied after verification |
 | Local Fast Path | 0. The session's own edit is the only model work. | The trusted verify command on a clean worktree built from the checkout snapshot | Already in the checkout. `ci` stays `UNVERIFIED`. |
 | Execution v2 `DIRECT` | Worker 1, router 0, reviewer 0 | Deterministic command | Applied locally |
 | Execution v2 `MANAGED` | Worker 1 to N, reviewer only when coverage is incomplete or complexity is not `small` | Command, then a conditional review | Applied after the gates |
@@ -58,14 +49,11 @@ A failed check delivers nothing, and the draft stays in the checkout for one rep
 
 Native tools reused: the host session's own edit tools, permissions and sandbox; `taskPolicy`, `usageEvidence`, `snapshot`, `changed`, `protectedChange`, `makeWorktree`, `processRun`, `discoverVerify`, `verifyProtection` and the apply mutex.
 
-## Status
+## Open status
 
 | Capability | Status | Evidence |
 | --- | --- | --- |
-| Fast path policy, scope, protected-path, snapshot and failure gates | VERIFIED (offline) | `tests/unit/native-first.test.mjs` |
-| Fast path starts no router, worker process or reviewer | VERIFIED (offline) | Sentinel `CODEX_BINARY` and `CLAUDE_BINARY` never launched |
-| Skill entry points for Claude Code and Codex | IMPLEMENTED | `skills/run/SKILL.md` step 0 and `codex-skills/model-ladder/SKILL.md`. No live session run. |
-| Passive telemetry report | VERIFIED (offline and real history) | `scripts/telemetry.mjs`. See [passive telemetry](../telemetry/passive-telemetry.md). |
+| Skill entry points for Claude Code and Codex | UNVERIFIED live | `skills/run/SKILL.md` step 0 and `codex-skills/model-ladder/SKILL.md` exist. No live session run. |
 | GitHub CI evidence and delivery gate | PARTIALLY VERIFIED | Check runs were read live from the public repository. Branch protection needs a token and returned `UNKNOWN`. |
 | Cloud handoff, Codex Cloud | PARTIALLY VERIFIED | `codex cloud exec --env` exists in Codex CLI 0.169.0 and is marked EXPERIMENTAL. No cloud task was started. |
 | Cloud handoff, Claude Code | PARTIALLY VERIFIED | `claude --cloud` exists in Claude Code 2.1.318. No cloud session was started. |

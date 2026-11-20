@@ -167,10 +167,10 @@ test('a read-only plan runs the worker in the user checkout, without a worktree 
   assert.equal(edited.out.attempts[0].reason, 'read-only task changed a.py')
 })
 
-test('directReason says whether the context is above the threshold', async () => {
+test('directReason is the router smallReason, with no context or threshold sentence', async () => {
   const route = { model: 'haiku', effort: 'low', reason: 'r', goal: 'g', scope: [], verify: null, acceptance: ['a'], allowTests: false, allowTestsReason: 'r', question: null, small: false, smallReason: 'Not small.' }
   const { out } = await call([{ label: 'route', result: route }], { contextTokens: 45000 })
-  assert.match(out.plan.directReason, /45000 tokens of context, 23% of a 200000-token window; the DIRECT threshold is 30%/)
+  assert.equal(out.plan.directReason, 'Not small.')
 })
 
 test('a throwing diagnosis falls back to the default move', async () => {
@@ -272,32 +272,27 @@ test('called directly without the skill, it points to /model-ladder:run', async 
   await assert.rejects(body({ task: 't' }, h.agent, h.budget, () => {}, () => {}), /internal engine/)
 })
 
-test('a small task in a large session comes back DIRECT, before any worker', async () => {
+test('a small task comes back DIRECT, before any worker, with the router reason only', async () => {
   const { out } = await routeOnly({ ...routed, small: true, smallReason: 'one function' }, { contextTokens: 400000 })
   assert.equal(out.status, 'DIRECT')
-  assert.match(out.plan.directReason, /one function/)
-  assert.match(out.plan.directReason, /400000/)
+  assert.equal(out.plan.directReason, 'one function')
   assert.deepEqual(out.attempts, [])
 })
 
-test('a small task in a small session, or a large task anywhere, still runs the ladder', async () => {
-  assert.equal((await routeThenPass({ ...routed, small: true }, { contextTokens: 50000 })).out.status, 'CANDIDATE')
+test('a large task still runs the ladder', async () => {
   assert.equal((await routeThenPass({ ...routed, small: false }, { contextTokens: 400000 })).out.status, 'CANDIDATE')
-  assert.equal((await routeThenPass({ ...routed, small: true })).out.status, 'CANDIDATE')
 })
 
-test('DIRECT is a percentage of the context window: boundary, off, missing window', async () => {
-  const run = async (extra) => ((await routeOnly({ ...routed, small: true }, extra)).out.status === 'DIRECT' ? 'DIRECT' : 'CANDIDATE')
-  assert.equal(await run({ contextTokens: 60000, contextWindow: 200000 }), 'DIRECT')
-  assert.equal(await run({ contextTokens: 59999, contextWindow: 200000 }), 'CANDIDATE')
-  assert.equal(await run({ contextTokens: 300000, contextWindow: 1000000, directThreshold: 30 }), 'DIRECT')
-  assert.equal(await run({ contextTokens: 299999, contextWindow: 1000000, directThreshold: 30 }), 'CANDIDATE')
-  assert.equal(await run({ contextTokens: 100000, contextWindow: 200000, directThreshold: 60 }), 'CANDIDATE')
-  assert.equal(await run({ contextTokens: 120000, contextWindow: 200000, directThreshold: 60 }), 'DIRECT')
-  assert.equal(await run({ contextTokens: 900000, contextWindow: 1000000, directThreshold: 'off' }), 'CANDIDATE')
-  assert.equal(await run({ contextTokens: 60000 }), 'DIRECT')
-  assert.equal(await run({ contextTokens: 59000 }), 'CANDIDATE')
-  assert.equal((await routeOnly({ ...routed, small: false }, { contextTokens: 190000, contextWindow: 200000 })).out.status === 'DIRECT' ? 'DIRECT' : 'CANDIDATE', 'CANDIDATE')
+test('DIRECT ignores the context window: small => DIRECT, off or large => not', async () => {
+  const run = async (small, extra) => ((await routeOnly({ ...routed, small }, extra)).out.status === 'DIRECT' ? 'DIRECT' : 'CANDIDATE')
+  assert.equal(await run(true, {}), 'DIRECT')
+  assert.equal(await run(true, { contextTokens: 1, contextWindow: 1000000 }), 'DIRECT')
+  assert.equal(await run(true, { contextTokens: 900000, contextWindow: 1000000 }), 'DIRECT')
+  assert.equal(await run(true, { contextTokens: 59000 }), 'DIRECT')
+  assert.equal(await run(true, { directThreshold: 'on' }), 'DIRECT')
+  assert.equal(await run(true, { contextTokens: 1, contextWindow: 200000, directThreshold: 60 }), 'DIRECT')
+  assert.equal(await run(true, { contextTokens: 900000, contextWindow: 1000000, directThreshold: 'off' }), 'CANDIDATE')
+  assert.equal(await run(false, { contextTokens: 190000, contextWindow: 200000 }), 'CANDIDATE')
 })
 
 test('forceLadder overrides DIRECT', async () => {

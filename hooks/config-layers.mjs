@@ -25,7 +25,8 @@ export function userConfigPath(runtime, env, home) {
 export const resolved = (value) => (typeof value === 'string' && !value.includes('${') ? value : undefined)
 
 // The plugin's worker_skills / verifier_skills / direct_threshold options are the user's defaults for every project. They join the
-// user layer, so a project file with the same key (even an empty one) wins.
+// user layer, so a project file with the same key (even an empty one) wins. direct_threshold is an on/off switch ("on" or "off");
+// a legacy numeric string still parses to a number and counts as on.
 export function pluginLayer(options = {}) {
   const layer = {}
   const direct = resolved(options.direct_threshold)

@@ -93,7 +93,7 @@ Windows 需使用 PATH 或 `CODEX_BINARY` 指定的原生 `codex.exe`，不接�
 
 | 操作 | 必要步驟 |
 |---|---|
-| DIRECT | 提供實際 `contextTokens`、`contextWindow`，且 router 須判定為小任務。 |
+| DIRECT | router 須判定為小任務（範圍明確的微小修改，或任何唯讀的問答與分析），不看 context 大小。 |
 | 完成 DIRECT | 只修改回傳的 `worktreePath`，再以原始輸入加 `directRun`、`directSummary` 交回。 |
 | 強制一般 ladder | 使用 `forceLadder: true`，停用 DIRECT。 |
 | 執行大型任務 | 若預估用量可能不足，回答用量風險詢問（`acceptUsageRisk: true` 為繼續）。 |
@@ -126,11 +126,11 @@ DIRECT 不代表完成，必須遵守回傳的保護規則，獨立驗證後才�
 | `timeoutMs` | `600000` | Codex 每個角色或驗證命令的閒置逾時。 |
 | `usageGuard` | 開啟、`90%` | 使用量保護，建議存於個人檔。 |
 | `worker_skills` / `verifier_skills` | 空白 | 自然語言角色指示。適用的指名能力為必用：worker 必須實際呼叫，不能只是照著做。 |
-| `direct_threshold` | `30` | 小任務 DIRECT 的 context 百分比，或 `"off"`。 |
+| `direct_threshold` | `"on"` | 小任務 DIRECT 的 `"on"` 或 `"off"` 開關。舊版數字 1–100 視為 `"on"`。 |
 | `autoRun` / `band` | `true` | 預設路由與顯示開關。 |
 
 Claude 模型別名會使用可用版本，Codex 的模型 ID 與 effort 請依帳戶調整。
-Claude 外掛選單提供 DIRECT 門檻 20–80（每 10 一級），另可選 `off`。
+Claude 外掛選單提供 DIRECT 值 `on` 與 `off`。
 未指定 `verify` 時，Codex 優先使用專案驗證 skill，再尋找既有 npm、pytest、Cargo、Go、Maven 或 Make 檢查。
 
 ### Codex sandbox：uv 與 Node 專案

@@ -80,7 +80,7 @@ Authentication, model-access, and sandbox errors stop Codex rather than triggeri
 Codex worker and verifier sandboxes have no network and a worktree without `.venv` or `node_modules`. A uv project borrows the main checkout's `.venv` read-only through role environment variables (`sandboxEnv` in `scripts/codex-run.mjs`); a uv verification without that `.venv`, or a failed npm-style check without `node_modules`, stops once instead of escalating.
 The verify command and the verifier run in a separate `attempt-<n>-verify` worktree built from the worker snapshot. This keeps ignored files from the worker's worktree out of verification. The runner compares the worktree to the candidate after each completed stage and blocks further review or application if the stage changed repository files. The runner retains the worker worktree when recovery calls for it.
 
-The default deterministic command runs in a runner-owned host shell with the runner's environment. Required isolation uses the native `codex sandbox` helper and a restricted filesystem and network profile. The runner tests the profile before routing and before handing it the command. Codex role commands use their role's native settings. Git worktrees provide separate checkouts and share Git metadata. See the [verification safety audit](docs/audits/verification-safety.md).
+The default deterministic command runs in a runner-owned host shell with the runner's environment. Required isolation uses the native `codex sandbox` helper and a restricted filesystem and network profile. The runner tests the profile before routing and before handing it the command. Codex role commands use their role's native settings. Git worktrees provide separate checkouts and share Git metadata.
 
 Claude Workflow returns `CANDIDATE` after the verifier records a matching Git tree before and after its checks. Finish reads those records, re-snapshots the worktree with a temporary index, and applies the verified tree under the existing apply mutex. Finish owns the final `VERIFIED`, `FAILED`, or `CONFLICT` status. Claude `DIRECT` retains the caller-session path.
 
@@ -118,7 +118,7 @@ The hook is best effort and fails open if Node is unavailable; final diff checks
 
 | Feature | Rule |
 |---|---|
-| DIRECT | Small task plus measured context at `direct_threshold`; never verified by the routing decision alone. |
+| DIRECT | The router judges the task small (a trivial bounded change or any read-only question or analysis) and `direct_threshold` is `on`; context size is not considered; never verified by the routing decision alone. |
 | Claude DIRECT | Main session edits, then a separate verifier checks, with at most three correction rounds. |
 | Codex DIRECT | Caller edits an isolated draft, then `directRun` reclaims scope, checks the baseline, verifies, and applies. |
 | Forecast | Duration ranges, observed phase timings and per-window headroom; elapsed/expected in the panel; one usage-risk confirmation before the worker when a window is insufficient or at risk. |

@@ -41,8 +41,8 @@ export const DEFAULTS = {
   // Natural-language skill instructions per role: the plugin options, overridden per project.
   worker_skills: '',
   verifier_skills: '',
-  // A small task goes DIRECT when the session holds at least this % of its context window, or "off".
-  direct_threshold: 30,
+  // A task the router judges small goes DIRECT unless this is "off". "on" (or a legacy number 1-100) allows it.
+  direct_threshold: 'on',
 }
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const OWN = [':!.claude/worktrees', ':!.model-ladder']
@@ -65,7 +65,7 @@ export function loadConfig(root, pluginOptions = {}) {
   if (typeof guard.enabled !== 'boolean') problems.push('usageGuard.enabled must be true or false')
   if (typeof guard.threshold !== 'number' || !(guard.threshold >= 1 && guard.threshold <= 100)) problems.push('usageGuard.threshold must be a number from 1 to 100')
   const dt = config.direct_threshold
-  if (dt !== 'off' && !(typeof dt === 'number' && dt > 0 && dt <= 100)) problems.push('direct_threshold must be a number from 1 to 100, or "off"')
+  if (dt !== 'on' && dt !== 'off' && !(typeof dt === 'number' && dt >= 1 && dt <= 100)) problems.push('direct_threshold must be "on" or "off" (a legacy number from 1 to 100 counts as on)')
   for (const key of ['worker_skills', 'verifier_skills']) if (typeof config[key] !== 'string') problems.push(`${key} must be a string of skill instructions`)
   return { config, problems }
 }

@@ -4,6 +4,12 @@
 
 Versions follow semantic versioning; Claude Code updates require a new `.claude-plugin/plugin.json` version.
 
+## [1.3.1] - 2026-11-20
+
+- **DIRECT no longer depends on context size.** The router's `small` judgment alone decides DIRECT; the session's context percentage no longer gates it. Before, a small task in a fresh session (for example 6% of a 1M window against a 40% threshold) still ran the full router, worker and verifier. Read-only questions, explanations and analysis now count as `small`. `forceLadder` still disables DIRECT, and a DIRECT result is still verified independently.
+- `direct_threshold` is now an `on`/`off` switch with default `on`. Legacy numeric values (1-100) are accepted and mean `on`. The plugin picker offers `on` and `off`. Codex runs no longer read context tokens for DIRECT, and the Codex skill no longer asks for `contextTokens` and `contextWindow`.
+- Docs: `DESIGN`, `USAGE` and the docs under `docs/` describe the new DIRECT rule. Audit, migration and architecture notes keep only items that are still open; `docs/audits/verification-safety.md`, `docs/audits/claude-handoff-validation.md` and `docs/migration/native-first.md` are removed because everything in them is done or has moved to another doc.
+
 ## [1.3.0] - 2026-11-19
 
 - **Local Fast Path**: `/model-ladder:run` and the Codex skill first try a fast path when the session can name the one file a task changes and the project's verify command fully checks it. `scripts/fast-path.mjs` applies the Execution v2 risk policy, the session edits the file, and the verify command runs on that exact snapshot in a clean worktree. No router, worker or verifier agent starts. Anything else, a dirty checkout or an active ladder run falls back to the ladder unchanged.

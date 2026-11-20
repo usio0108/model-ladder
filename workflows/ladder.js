@@ -47,18 +47,10 @@ function pickMove(choice, cell, tiers) {
   return match ?? moves[0] ?? null
 }
 
-// Orchestration re-reads the caller's context on every turn; once the session holds this percentage of its
-// context window, a small task costs less done directly. "off" never goes direct. Provisional: see DESIGN.md.
-const DEFAULT_WINDOW = 200000
-const DEFAULT_DIRECT_THRESHOLD = 30
-
-function contextPercent(contextTokens, contextWindow) {
-  return ((contextTokens ?? 0) / (contextWindow > 0 ? contextWindow : DEFAULT_WINDOW)) * 100
-}
-
-function isDirect(small, contextTokens, forceLadder, contextWindow, directThreshold = DEFAULT_DIRECT_THRESHOLD) {
-  if (forceLadder || !small || directThreshold === 'off') return false
-  return contextPercent(contextTokens, contextWindow) >= directThreshold
+// DIRECT follows the router's small judgment alone. direct_threshold is an on/off switch: "off" never goes
+// direct; "on" or any legacy number (1-100) allows it.
+function isDirect(small, forceLadder, direct) {
+  return small && !forceLadder && direct !== 'off'
 }
 
 const FORECAST_MAX_AGE = 90 * 86400000
@@ -409,7 +401,7 @@ Also return:
 - acceptance: checkable done criteria, one per item, limited to what a worker can do in an isolated worktree and a verifier can judge from the diff. Never list commit, push, release, tag or clean-working-tree conditions: the worker may not commit or stage, and finishing is handled outside the attempt. ${args.acceptance?.length ? 'The user already gave them; return them unchanged.' : 'Empty if the verify command alone defines done.'}
 - allowTests: true only when the task itself is to write or change tests. A bug fix is not: the tests define the expected behavior.
 - question: if the task is too vague to act on (no clear outcome, several very different readings), the one question that would settle it. Otherwise null. A worker would guess, and passing tests would hide the guess.
-- small: true when the task touches one or two files and its design is already given (for example "implement this function as described"), so a capable model would finish it in one pass. Otherwise false.
+- small: true for a trivial, bounded change the calling session can do safely (one or two files, design already given, for example "implement this function as described"), and also true for any read-only question, explanation or analysis task that changes no files. Otherwise false.
 - smallReason: one sentence on why.
 - readOnly: true when the task only reads and reports (a review, an analysis, a question) and edits no file. Otherwise false.
 - estimatedMinutes (most likely), optimisticMinutes and pessimisticMinutes: positive integer wall-clock minutes for the FULL run, including routing, implementation, worker self-checks, test commands, independent verification, diagnosis and retry risk. Give an honest ordered range, not a guarantee.
@@ -424,7 +416,7 @@ Also return:
   const verify = config.verify ?? (args.hasVerifySkill ? VERIFY_SKILL : r.verify)
   const acceptance = args.acceptance?.length ? args.acceptance : dropUnachievableAcceptance(r.acceptance)
   const startReason = isCell(r, config.tiers) ? r.reason : `Router picked ${label(r)}, not in the grid; starting at ${label(lowest)}`
-  const direct = isDirect(r.small === true, args.contextTokens, args.forceLadder, args.contextWindow, args.directThreshold)
+  const direct = isDirect(r.small === true, args.forceLadder, args.directThreshold)
   return {
     start,
     startReason,
@@ -443,7 +435,7 @@ Also return:
     pessimisticMinutes: r.pessimisticMinutes,
     workerMinutes: r.workerMinutes,
     verifyMinutes: r.verifyMinutes,
-    directReason: `${r.smallReason} The calling session holds about ${args.contextTokens} tokens of context, ${Math.round(contextPercent(args.contextTokens, args.contextWindow))}% of a ${args.contextWindow > 0 ? args.contextWindow : DEFAULT_WINDOW}-token window; the DIRECT threshold is ${args.directThreshold === 'off' ? 'off' : `${args.directThreshold ?? DEFAULT_DIRECT_THRESHOLD}%`}.`,
+    directReason: r.smallReason,
     // Without a verify step the user, not the router, decides what done means.
     needsAcceptance: !verify && !args.acceptance?.length,
     // Built here, not by the skill: the question box shows one flat paragraph, so the list goes in a message.
@@ -717,7 +709,7 @@ if (plan.limited) {
     attempts: [], winner: null, final: plan.limited, tokens: plan.routeTokens,
   }
 }
-// The caller does a small task itself when its own context makes orchestration the bigger cost.
+// The caller does a small task itself when the router judged it small (and DIRECT is not switched off).
 if (!args.plan && plan.direct) {
   return { status: 'DIRECT', plan, attempts: [], tokens: plan.routeTokens }
 }

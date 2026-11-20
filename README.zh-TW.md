@@ -23,7 +23,7 @@ model-ladder 是 [Claude Code](https://code.claude.com) 與 Codex 的外掛。Ro
 
 - **隔離的 Git worktree**：每次嘗試各自在獨立 worktree 中執行。
 - **適時升級**：驗證失敗時，可能改用更強的模型或提高 effort。
-- **小任務 DIRECT**：實際 session context 達到設定門檻時，由主 session 處理小任務，完成後仍須獨立驗證。
+- **小任務 DIRECT**：router 判定為小任務時（瑣碎且範圍明確的修改，或任何唯讀的提問、說明、分析），由主 session 處理，有修改時完成後仍須獨立驗證。與 context 大小無關，可用 `direct_threshold` 關閉 DIRECT。
 - **預估資訊**：每個 agent 列的時間欄顯示該 agent 自己的「經過/預期時長」（例如 `5s/12m`；執行中的 agent 超過預期後，預期時長會分段重新估計，已結束的列保留原值，僅 worker、test-writer、verifier 列；來自先前成功的 run，尚無歷史時採用 router 給的單次分鐘數；router、diagnose、final diagnosis 列只顯示經過時間）；開跑時若預估某個用量時間窗不足或有風險，會在 worker 開始前詢問一次。
 - **並行執行**：檔案範圍不重疊的 run 可同時進行，並有重疊檢查與序列化套用結果。
 - **自動路由與分層設定**：session hook 預設啟用 ladder，並支援個人設定與專案覆寫。
@@ -152,7 +152,7 @@ Claude 若需在外掛介面以外設定，使用 `~/.claude/model-ladder.json`�
 | `band` | `true` | 顯示 Band 或 panel。 |
 | `worker_skills`（**Worker skill instructions**） | 空白 | 指定 worker 與 test-writer 使用的 skills 或工具。worker 須逐項回報指示中的能力；適用且可用卻未使用時，該次嘗試判為失敗。 |
 | `verifier_skills`（**Verifier skill instructions**） | 空白 | 指定驗證時使用的 skills 或工具。 |
-| `direct_threshold` | `30` | 小任務使用 DIRECT 的 context 百分比門檻，`off` 停用。 |
+| `direct_threshold` | `on` | 小任務使用 DIRECT 的開關，`off` 停用；舊版數字 1–100 視同 `on`。 |
 | `usageGuard` | 開啟、`90%` | 達到設定的用量門檻時停止。 |
 
 專案的 `.claude/model-ladder.json` 或 `.codex/model-ladder.json` 優先於個人設定，使用量保護建議放個人檔，除非專案需要覆寫。

@@ -5,10 +5,10 @@ import { homedir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { isDeepStrictEqual } from 'node:util'
 import { TEST_PATTERNS } from '../hooks/guard.mjs'
-import { legalMoves, pickMove, isCell, isDirect, usageRisk, dropUnachievableAcceptance } from './ladder-rules.mjs'
+import { legalMoves, pickMove, isCell, usageRisk, dropUnachievableAcceptance } from './ladder-rules.mjs'
 import { agentExpected } from '../hooks/band/rows.mjs'
 import { agentExpectations, history, startForecast, routeForecast, updateForecast, finishForecast, withRouterMinutes } from './forecast.mjs'
-import { readCodexContext, readCodexUsage } from './codex-usage.mjs'
+import { readCodexUsage } from './codex-usage.mjs'
 import { renderLive } from './codex-live.mjs'
 import { writeHandoff } from './codex-handoff.mjs'
 import { codexExec, EnvironmentError, processRun, SCHEMAS, validate } from './codex-exec.mjs'
@@ -35,7 +35,7 @@ export const DEFAULTS = {
   ],
   maxAttempts: 4, verify: null, protected: [], keepFailed: false, network: false, timeoutMs: 600000,
   usageGuard: GUARD_DEFAULT,
-  direct_threshold: 30, commit: false, autoRun: true, band: true, hudTakeover: true, worker_skills: '', verifier_skills: '',
+  direct_threshold: 'on', commit: false, autoRun: true, band: true, hudTakeover: true, worker_skills: '', verifier_skills: '',
 }
 const FAMILY_FALLBACK = { luna: 'gpt-6-luna', terra: 'gpt-6.1-terra', sol: 'gpt-6.1-sol' }
 // luna/terra/sol -> highest-version gpt-<ver>-<family> slug in $CODEX_HOME/models_cache.json; anything else is returned unchanged.
@@ -78,7 +78,7 @@ export function loadConfig(root) {
   if (typeof config.keepFailed !== 'boolean') throw new Error('keepFailed must be boolean')
   for (const key of ['network', 'autoRun', 'band', 'hudTakeover', 'commit']) if (typeof config[key] !== 'boolean') throw new Error(`${key} must be boolean`)
   const dt = config.direct_threshold
-  if (dt !== 'off' && !(typeof dt === 'number' && dt >= 1 && dt <= 100)) throw new Error('direct_threshold must be a number between 1 and 100, or "off"')
+  if (dt !== 'on' && dt !== 'off' && !(typeof dt === 'number' && dt >= 1 && dt <= 100)) throw new Error('direct_threshold must be "on" or "off" (a legacy number from 1 to 100 counts as on)')
   for (const key of ['worker_skills', 'verifier_skills']) if (typeof config[key] !== 'string') throw new Error(`${key} must be a string of skill instructions`)
   const guard = config.usageGuard
   if (typeof guard?.enabled !== 'boolean' || typeof guard.threshold !== 'number' || !(guard.threshold >= 1 && guard.threshold <= 100)) throw new Error('usageGuard requires boolean enabled and threshold between 1 and 100')
@@ -374,11 +374,7 @@ export async function runLadder(input, options = {}) {
       if (!contract) validate(checkpoint.route, SCHEMAS[routeSchemaName(Object.hasOwn(checkpoint.route, 'small'), Object.hasOwn(checkpoint.route, 'acceptance'))])
       checkpoint.tree = snapshot(sourceCwd, run, 'resume')
     }
-    const context = input.contextTokens !== undefined || input.contextWindow !== undefined
-      ? { tokens: input.contextTokens, window: input.contextWindow }
-      : readCodexContext(options.cwd ?? process.cwd())
-    const directContext = !contract && context && Number.isFinite(context.tokens) && Number.isFinite(context.window) &&
-      isDirect(true, context.tokens, input.forceLadder, context.window, config.direct_threshold)
+    const directContext = !contract && !input.forceLadder && config.direct_threshold !== 'off'
     const ask = async (phase, cell, cwd, prompt, sandbox = 'read-only') => {
       const skills = phase === 'worker' ? config.worker_skills : phase === 'verify' ? config.verifier_skills : ''
       if (skills.trim() && !skills.includes('${')) prompt += `\n\nSKILL INSTRUCTIONS\n${skills}\n\nInterpret these natural-language instructions in the context of your assigned task and role. Evaluate each condition first, then select only the applicable relevant skills, plugins, slash commands, MCP tools or other capabilities actually available in this session. Existing name lists are requests to use those capabilities where relevant. A name may be a skill, a plugin name or an MCP server name (tools named mcp__<server>__*); map it to the matching available capability. Locate and read selected skills' SKILL.md files using the supplied skill paths and follow them, and call plugin, slash-command and MCP tools directly, within this role's scope, permissions, protected paths and verification rules. Verifiers only check and report; they never fix code. If an applicable required capability cannot be found, report it explicitly as a blocker and list the available capabilities you checked; never invent names or claim to have used a capability you did not use. Never invoke model-ladder skills, workflows or runners recursively.`
@@ -393,7 +389,7 @@ export async function runLadder(input, options = {}) {
         : `\nRun the provided VERIFY command yourself when available${verifySkill ? `, or follow the existing project verification skill at ${verifySkill}` : ''}. Report the actual self-check commands and results in summary; do not invent a passing check or acceptance criteria. Verification by another role remains required.`
       if (phase === 'verify' && (contract || requireVerificationSandbox)) prompt += '\nThe runner already observed a successful deterministic check. Judge acceptance without rerunning the command.'
       if (contract) prompt += '\nDo not publish, deploy, push, write credentials, or run commands with external side effects. The listed scope limits editing.'
-      if (phase === 'route' && directContext) prompt += '\nAlso return small (boolean) and smallReason. small is true only for a trivial, bounded task the calling session can implement safely. Context size is supplied by the caller; do not infer or invent it.'
+      if (phase === 'route' && directContext) prompt += '\nAlso return small (boolean) and smallReason. small is true for a trivial, bounded change the calling session can do safely, and also for any read-only question, explanation or analysis task that changes no files. Otherwise false.'
       if (phase === 'route') prompt += `\nacceptance must be limited to conditions a worker can meet in an isolated worktree and a verifier can judge from the diff. Never put commit, push, release, tag or clean-working-tree conditions in acceptance: the worker may not commit or stage, and finishing happens outside the attempt.${acceptance.length ? ' The user already supplied acceptance; do not add to it.' : ' Return acceptance as a list of checkable done criteria, empty if the verify command alone defines done.'}`
       if (phase === 'route') prompt += '\nReturn workerMinutes and verifyMinutes as positive integer wall-clock minutes for ONE worker attempt (implementation and self-checks) and ONE independent verification.'
       if (phase === 'worker' && route.allowTests) prompt += '\nTEST-WRITER ROLE: the user requested test changes. Tests must check real behavior; never weaken existing tests. Change code under test only if the task requests it. Explicit protected paths and verification inputs remain forbidden.'
